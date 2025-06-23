@@ -89,7 +89,15 @@ curl http://localhost:8080/api/v1/health
 Expected response:
 
 ```json
-{ "status": "healthy", "message": "Authorization service is running" }
+{
+  "status": "healthy",
+  "service": "multi-model-casbin-auth-service",
+  "supported_models": ["acl", "rbac", "abac", "rebac"],
+  "default_model": "rbac",
+  "database": "sqlite",
+  "version": "2.0.0",
+  "rebac_features": ["ownership", "hierarchy", "groups", "social"]
+}
 ```
 
 ### Check Available Models
@@ -102,8 +110,29 @@ Expected response:
 
 ```json
 {
-  "models": ["acl", "rbac", "abac", "rebac"],
-  "message": "Supported authorization models"
+  "models": [
+    {
+      "name": "acl",
+      "description": "Access Control List - Direct user-resource mapping",
+      "usage": "Small-scale systems, simple permission management"
+    },
+    {
+      "name": "rbac",
+      "description": "Role-Based Access Control - Role-based authorization",
+      "usage": "Enterprise systems, organizational permission management"
+    },
+    {
+      "name": "abac",
+      "description": "Attribute-Based Access Control - Attribute-based authorization",
+      "usage": "Advanced security, dynamic permission control"
+    },
+    {
+      "name": "rebac",
+      "description": "Relationship-Based Access Control - Graph-based authorization",
+      "usage": "Social media, collaboration platforms, hierarchical organizations"
+    }
+  ],
+  "default": "rbac"
 }
 ```
 
@@ -202,6 +231,7 @@ Expected response:
 ```json
 {
   "allowed": true,
+  "message": "Access granted",
   "model": "acl"
 }
 ```
@@ -224,6 +254,7 @@ Expected response:
 ```json
 {
   "allowed": false,
+  "message": "Access denied",
   "model": "acl"
 }
 ```
@@ -232,6 +263,21 @@ Expected response:
 
 ```bash
 curl "http://localhost:8080/api/v1/policies?model=acl"
+```
+
+Expected response:
+
+```json
+{
+  "policies": [
+    ["alice", "company_strategy.pdf", "read"],
+    ["alice", "company_strategy.pdf", "write"],
+    ["diana", "employee_records.xlsx", "read"],
+    ["diana", "employee_records.xlsx", "write"],
+    ["charlie", "source_code.zip", "read"]
+  ],
+  "model": "acl"
+}
 ```
 
 ### ACL Summary
@@ -273,6 +319,16 @@ curl -X POST http://localhost:8080/api/v1/roles \
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Role added successfully",
+  "model": "rbac"
+}
+```
+
 Assign Bob the "manager" role:
 
 ```bash
@@ -282,6 +338,16 @@ curl -X POST http://localhost:8080/api/v1/roles \
     "user": "bob",
     "role": "manager"
   }'
+```
+
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Role added successfully",
+  "model": "rbac"
+}
 ```
 
 Assign Charlie the "engineer" role:
@@ -295,6 +361,16 @@ curl -X POST http://localhost:8080/api/v1/roles \
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Role added successfully",
+  "model": "rbac"
+}
+```
+
 Assign Diana the "hr_manager" role:
 
 ```bash
@@ -306,6 +382,16 @@ curl -X POST http://localhost:8080/api/v1/roles \
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Role added successfully",
+  "model": "rbac"
+}
+```
+
 Assign Frank the "engineer" role too:
 
 ```bash
@@ -315,6 +401,16 @@ curl -X POST http://localhost:8080/api/v1/roles \
     "user": "frank",
     "role": "engineer"
   }'
+```
+
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Role added successfully",
+  "model": "rbac"
+}
 ```
 
 ### Step 2: Define Role Permissions
@@ -475,10 +571,30 @@ See what roles Alice has:
 curl "http://localhost:8080/api/v1/users/roles?user=alice"
 ```
 
+Expected response:
+
+```json
+{
+  "user": "alice",
+  "roles": ["ceo"],
+  "model": "rbac"
+}
+```
+
 See what roles Charlie has:
 
 ```bash
 curl "http://localhost:8080/api/v1/users/roles?user=charlie"
+```
+
+Expected response:
+
+```json
+{
+  "user": "charlie",
+  "roles": ["engineer"],
+  "model": "rbac"
+}
 ```
 
 ### RBAC Summary
@@ -529,6 +645,22 @@ curl -X POST http://localhost:8080/api/v1/users/attributes \
       "location": "office"
     }
   }'
+```
+
+Expected response:
+
+```json
+{
+  "message": "User attributes set successfully",
+  "subject": "alice",
+  "attributes": {
+    "department": "executive",
+    "clearance": "top_secret",
+    "position": "ceo",
+    "location": "office"
+  },
+  "model": "abac"
+}
 ```
 
 Set attributes for Bob (Engineering Manager):
@@ -655,10 +787,40 @@ Check Alice's attributes:
 curl "http://localhost:8080/api/v1/users/attributes?user=alice"
 ```
 
+Expected response:
+
+```json
+{
+  "user": "alice",
+  "attributes": {
+    "department": "executive",
+    "clearance": "top_secret",
+    "position": "ceo",
+    "location": "office"
+  },
+  "model": "abac"
+}
+```
+
 Check Charlie's attributes:
 
 ```bash
 curl "http://localhost:8080/api/v1/users/attributes?user=charlie"
+```
+
+Expected response:
+
+```json
+{
+  "user": "charlie",
+  "attributes": {
+    "department": "engineering",
+    "clearance": "confidential",
+    "position": "engineer",
+    "location": "office"
+  },
+  "model": "abac"
+}
 ```
 
 ### ABAC Summary
@@ -706,6 +868,18 @@ curl -X POST http://localhost:8080/api/v1/relationships \
     "relationship": "owner",
     "object": "company_strategy.pdf"
   }'
+```
+
+Expected response:
+
+```json
+{
+  "message": "Relationship added successfully",
+  "subject": "alice",
+  "relationship": "owner",
+  "object": "company_strategy.pdf",
+  "model": "rebac"
+}
 ```
 
 Bob owns the engineering documentation:
@@ -881,7 +1055,20 @@ Find how Charlie can access source code:
 curl "http://localhost:8080/api/v1/relationships/path?subject=charlie&object=source_code.zip&max_depth=5"
 ```
 
-This should show the path: charlie → member → engineering_team → group_access → source_code.zip
+Expected response:
+
+```json
+{
+  "found": true,
+  "path": "charlie -[member]-> engineering_team -[group_access]-> source_code.zip",
+  "subject": "charlie",
+  "object": "source_code.zip",
+  "max_depth": 5,
+  "model": "rebac"
+}
+```
+
+This shows the path: charlie → member → engineering_team → group_access → source_code.zip
 
 ### Step 8: List Relationships
 
@@ -891,10 +1078,52 @@ See all relationships for Charlie:
 curl "http://localhost:8080/api/v1/relationships?subject=charlie"
 ```
 
+Expected response:
+
+```json
+{
+  "relationships": [
+    {
+      "subject": "charlie",
+      "relationship": "member",
+      "object": "engineering_team"
+    },
+    {
+      "subject": "charlie",
+      "relationship": "editor",
+      "object": "engineering_docs.md"
+    }
+  ],
+  "subject": "charlie",
+  "model": "rebac"
+}
+```
+
 See all relationships involving the engineering team:
 
 ```bash
 curl "http://localhost:8080/api/v1/relationships?subject=engineering_team"
+```
+
+Expected response:
+
+```json
+{
+  "relationships": [
+    {
+      "subject": "engineering_team",
+      "relationship": "group_access",
+      "object": "source_code.zip"
+    },
+    {
+      "subject": "engineering_team",
+      "relationship": "group_access",
+      "object": "engineering_docs.md"
+    }
+  ],
+  "subject": "engineering_team",
+  "model": "rebac"
+}
 ```
 
 ### ReBAC Summary
