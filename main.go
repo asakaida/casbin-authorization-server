@@ -935,6 +935,33 @@ func (s *AuthService) getObjectAttributes(objectID string) map[string]string {
 	return nil
 }
 
+// Enforce performs authorization check for the given model
+func (s *AuthService) Enforce(model AccessControlModel, subject, object, action string, attributes map[string]string) (bool, error) {
+	// Set default model
+	if model == "" {
+		model = ModelRBAC
+	}
+
+	var allowed bool
+	var err error
+
+	switch model {
+	case ModelACL, ModelRBAC:
+		enforcer := s.getEnforcer(model)
+		allowed, err = enforcer.Enforce(subject, object, action)
+	case ModelABAC:
+		// ABAC uses custom policy engine
+		allowed = s.matchABACAttributes(subject, object, action, attributes)
+	case ModelReBAC:
+		// ReBAC uses relationship graph
+		allowed, _ = s.relationshipGraph.CheckReBACAccess(subject, object, action)
+	default:
+		return false, fmt.Errorf("invalid model specified: %s", model)
+	}
+
+	return allowed, err
+}
+
 // getEnforcer returns the appropriate enforcer for the given model
 func (s *AuthService) getEnforcer(model AccessControlModel) *casbin.Enforcer {
 	switch model {
@@ -1360,15 +1387,25 @@ func (s *AuthService) addRoleHandler(w http.ResponseWriter, r *http.Request) {
 
 // setUserAttributesHandler sets user attributes for ABAC with database persistence
 func (s *AuthService) setUserAttributesHandler(w http.ResponseWriter, r *http.Request) {
-	var req AttributeRequest
+	vars := mux.Vars(r)
+	userId := vars["userId"]
+	
+	var req struct {
+		Attributes map[string]string `json:"attributes"`
+	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
 
+	if len(req.Attributes) == 0 {
+		http.Error(w, "attributes are required", http.StatusBadRequest)
+		return
+	}
+
 	// Save each attribute to database and update cache
 	for k, v := range req.Attributes {
-		err := s.saveUserAttribute(req.Subject, k, v)
+		err := s.saveUserAttribute(userId, k, v)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Failed to save user attribute: %v", err), http.StatusInternalServerError)
 			return
@@ -1377,12 +1414,14 @@ func (s *AuthService) setUserAttributesHandler(w http.ResponseWriter, r *http.Re
 
 	response := map[string]interface{}{
 		"message":    "User attributes set successfully",
-		"subject":    req.Subject,
-		"attributes": s.userAttrs[req.Subject],
+		"user":       userId,
+		"attributes": s.userAttrs[userId],
+		"count":      len(req.Attributes),
 		"model":      "abac",
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -1416,21 +1455,19 @@ func (s *AuthService) getPoliciesHandler(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *AuthService) getUserRolesHandler(w http.ResponseWriter, r *http.Request) {
-	user := r.URL.Query().Get("user")
-	if user == "" {
-		http.Error(w, "user parameter is required", http.StatusBadRequest)
-		return
-	}
+	vars := mux.Vars(r)
+	userId := vars["userId"]
 
-	roles, err := s.rbacEnforcer.GetRolesForUser(user)
+	roles, err := s.rbacEnforcer.GetRolesForUser(userId)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Role retrieval error: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]interface{}{
-		"user":  user,
+		"user":  userId,
 		"roles": roles,
+		"count": len(roles),
 		"model": "rbac",
 	}
 
@@ -1439,22 +1476,20 @@ func (s *AuthService) getUserRolesHandler(w http.ResponseWriter, r *http.Request
 }
 
 func (s *AuthService) getUserAttributesHandler(w http.ResponseWriter, r *http.Request) {
-	user := r.URL.Query().Get("user")
-	if user == "" {
-		http.Error(w, "user parameter is required", http.StatusBadRequest)
-		return
-	}
+	vars := mux.Vars(r)
+	userId := vars["userId"]
 
 	// Get attributes from database (ensures consistency)
-	attributes, err := s.getUserAttributesFromDB(user)
+	attributes, err := s.getUserAttributesFromDB(userId)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to retrieve user attributes: %v", err), http.StatusInternalServerError)
 		return
 	}
 
 	response := map[string]interface{}{
-		"user":       user,
+		"user":       userId,
 		"attributes": attributes,
+		"count":      len(attributes),
 		"model":      "abac",
 	}
 
@@ -1538,21 +1573,19 @@ func (s *AuthService) setObjectAttributesHandler(w http.ResponseWriter, r *http.
 
 // getObjectAttributesHandler retrieves attributes for an object (ABAC)
 func (s *AuthService) getObjectAttributesHandler(w http.ResponseWriter, r *http.Request) {
-	object := r.URL.Query().Get("object")
-	if object == "" {
-		http.Error(w, "object parameter is required", http.StatusBadRequest)
-		return
-	}
+	vars := mux.Vars(r)
+	objectId := vars["objectId"]
 
 	// Get attributes from database
-	attributes := s.getObjectAttributes(object)
+	attributes := s.getObjectAttributes(objectId)
 	if attributes == nil {
 		attributes = make(map[string]string)
 	}
 
 	response := map[string]interface{}{
-		"object":     object,
+		"object":     objectId,
 		"attributes": attributes,
+		"count":      len(attributes),
 		"model":      "abac",
 	}
 
@@ -1597,6 +1630,37 @@ func (s *AuthService) addABACPolicyHandler(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// deleteABACPolicyHandler removes an ABAC policy using path parameter
+func (s *AuthService) deleteABACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	policyId := vars["id"]
+
+	err := s.policyEngine.RemovePolicy(policyId)
+	if err != nil {
+		if err.Error() == "policy not found" {
+			w.WriteHeader(http.StatusNotFound)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"removed": false,
+				"message": "Policy not found",
+				"id":      policyId,
+			})
+			return
+		}
+		http.Error(w, fmt.Sprintf("Failed to remove policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"removed": true,
+		"message": "ABAC policy removed successfully",
+		"id":      policyId,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -1667,6 +1731,563 @@ func (s *AuthService) getABACPolicyHandler(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(policy)
 }
 
+// authorizationHandler handles authorization checks for all models
+func (s *AuthService) authorizationHandler(w http.ResponseWriter, r *http.Request) {
+	var request EnforceRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if request.Subject == "" || request.Object == "" || request.Action == "" {
+		http.Error(w, "subject, object, and action are required", http.StatusBadRequest)
+		return
+	}
+
+	allowed, err := s.Enforce(request.Model, request.Subject, request.Object, request.Action, request.Attributes)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Authorization error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"allowed": allowed,
+		"message": map[bool]string{true: "Access granted", false: "Access denied"}[allowed],
+		"model":   request.Model,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(map[bool]int{true: http.StatusOK, false: http.StatusForbidden}[allowed])
+	json.NewEncoder(w).Encode(response)
+}
+
+// addACLPolicyHandler handles adding ACL policies
+func (s *AuthService) addACLPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	var request PolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if request.Subject == "" || request.Object == "" || request.Action == "" {
+		http.Error(w, "subject, object, and action are required", http.StatusBadRequest)
+		return
+	}
+
+	added, err := s.aclEnforcer.AddPolicy(request.Subject, request.Object, request.Action)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to add policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !added {
+		response := map[string]interface{}{
+			"added":   false,
+			"message": "Policy already exists",
+			"policy": map[string]string{
+				"subject": request.Subject,
+				"object":  request.Object,
+				"action":  request.Action,
+			},
+			"model": "acl",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	s.aclEnforcer.SavePolicy()
+
+	response := map[string]interface{}{
+		"added":   true,
+		"message": "Policy added successfully",
+		"policy": map[string]string{
+			"subject": request.Subject,
+			"object":  request.Object,
+			"action":  request.Action,
+		},
+		"model": "acl",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+// getACLPoliciesHandler retrieves all ACL policies
+func (s *AuthService) getACLPoliciesHandler(w http.ResponseWriter, r *http.Request) {
+	policies, err := s.aclEnforcer.GetPolicy()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Policy retrieval error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"policies": policies,
+		"count":    len(policies),
+		"model":    "acl",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// deleteACLPolicyHandler removes an ACL policy
+func (s *AuthService) deleteACLPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	policyId := vars["id"]
+	
+	// Parse policy ID format: "subject:object:action"
+	parts := strings.Split(policyId, ":")
+	if len(parts) != 3 {
+		http.Error(w, "Policy ID must be in format 'subject:object:action'", http.StatusBadRequest)
+		return
+	}
+
+	removed, err := s.aclEnforcer.RemovePolicy(parts[0], parts[1], parts[2])
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to remove policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !removed {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"removed": false,
+			"message": "Policy not found",
+			"model":   "acl",
+		})
+		return
+	}
+
+	s.aclEnforcer.SavePolicy()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"removed": true,
+		"message": "Policy removed successfully",
+		"model":   "acl",
+	})
+}
+
+// addRBACPolicyHandler handles adding RBAC policies
+func (s *AuthService) addRBACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	var request PolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if request.Subject == "" || request.Object == "" || request.Action == "" {
+		http.Error(w, "subject, object, and action are required", http.StatusBadRequest)
+		return
+	}
+
+	added, err := s.rbacEnforcer.AddPolicy(request.Subject, request.Object, request.Action)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to add policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !added {
+		response := map[string]interface{}{
+			"added":   false,
+			"message": "Policy already exists",
+			"policy": map[string]string{
+				"subject": request.Subject,
+				"object":  request.Object,
+				"action":  request.Action,
+			},
+			"model": "rbac",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	s.rbacEnforcer.SavePolicy()
+
+	response := map[string]interface{}{
+		"added":   true,
+		"message": "Policy added successfully",
+		"policy": map[string]string{
+			"subject": request.Subject,
+			"object":  request.Object,
+			"action":  request.Action,
+		},
+		"model": "rbac",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+// getRBACPoliciesHandler retrieves all RBAC policies
+func (s *AuthService) getRBACPoliciesHandler(w http.ResponseWriter, r *http.Request) {
+	policies, err := s.rbacEnforcer.GetPolicy()
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Policy retrieval error: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"policies": policies,
+		"count":    len(policies),
+		"model":    "rbac",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// deleteRBACPolicyHandler removes an RBAC policy
+func (s *AuthService) deleteRBACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	policyId := vars["id"]
+	
+	// Parse policy ID format: "subject:object:action"
+	parts := strings.Split(policyId, ":")
+	if len(parts) != 3 {
+		http.Error(w, "Policy ID must be in format 'subject:object:action'", http.StatusBadRequest)
+		return
+	}
+
+	removed, err := s.rbacEnforcer.RemovePolicy(parts[0], parts[1], parts[2])
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to remove policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !removed {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"removed": false,
+			"message": "Policy not found",
+			"model":   "rbac",
+		})
+		return
+	}
+
+	s.rbacEnforcer.SavePolicy()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"removed": true,
+		"message": "Policy removed successfully",
+		"model":   "rbac",
+	})
+}
+
+// addUserRoleHandler handles adding roles to users
+func (s *AuthService) addUserRoleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userId := vars["userId"]
+	
+	var request struct {
+		Role string `json:"role"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	if request.Role == "" {
+		http.Error(w, "role is required", http.StatusBadRequest)
+		return
+	}
+
+	added, err := s.rbacEnforcer.AddRoleForUser(userId, request.Role)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to add role: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !added {
+		response := map[string]interface{}{
+			"added":   false,
+			"message": "User already has this role",
+			"user":    userId,
+			"role":    request.Role,
+			"model":   "rbac",
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	s.rbacEnforcer.SavePolicy()
+
+	response := map[string]interface{}{
+		"added":   true,
+		"message": "Role added successfully",
+		"user":    userId,
+		"role":    request.Role,
+		"model":   "rbac",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(response)
+}
+
+// deleteUserRoleHandler removes a role from a user
+func (s *AuthService) deleteUserRoleHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userId := vars["userId"]
+	roleId := vars["roleId"]
+
+	removed, err := s.rbacEnforcer.DeleteRoleForUser(userId, roleId)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to remove role: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	if !removed {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"removed": false,
+			"message": "User does not have this role",
+			"user":    userId,
+			"role":    roleId,
+			"model":   "rbac",
+		})
+		return
+	}
+
+	s.rbacEnforcer.SavePolicy()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"removed": true,
+		"message": "Role removed successfully",
+		"user":    userId,
+		"role":    roleId,
+		"model":   "rbac",
+	})
+}
+
+// deleteUserAttributeHandler removes a user attribute
+func (s *AuthService) deleteUserAttributeHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userId := vars["userId"]
+	key := vars["key"]
+
+	// Remove from database
+	result := s.db.Where("user_id = ? AND attribute = ?", userId, key).Delete(&UserAttribute{})
+	if result.Error != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete user attribute: %v", result.Error), http.StatusInternalServerError)
+		return
+	}
+
+	if result.RowsAffected == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"removed": false,
+			"message": "Attribute not found",
+			"user":    userId,
+			"key":     key,
+			"model":   "abac",
+		})
+		return
+	}
+
+	// Remove from cache
+	if s.userAttrs[userId] != nil {
+		delete(s.userAttrs[userId], key)
+		if len(s.userAttrs[userId]) == 0 {
+			delete(s.userAttrs, userId)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"removed": true,
+		"message": "Attribute removed successfully",
+		"user":    userId,
+		"key":     key,
+		"model":   "abac",
+	})
+}
+
+// deleteObjectAttributeHandler removes an object attribute
+func (s *AuthService) deleteObjectAttributeHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	objectId := vars["objectId"]
+	key := vars["key"]
+
+	// Remove from database
+	result := s.db.Where("object_id = ? AND attribute = ?", objectId, key).Delete(&ObjectAttribute{})
+	if result.Error != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete object attribute: %v", result.Error), http.StatusInternalServerError)
+		return
+	}
+
+	if result.RowsAffected == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"removed": false,
+			"message": "Attribute not found",
+			"object":  objectId,
+			"key":     key,
+			"model":   "abac",
+		})
+		return
+	}
+
+	// Remove from cache
+	if s.objectAttrs[objectId] != nil {
+		delete(s.objectAttrs[objectId], key)
+		if len(s.objectAttrs[objectId]) == 0 {
+			delete(s.objectAttrs, objectId)
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"removed": true,
+		"message": "Attribute removed successfully",
+		"object":  objectId,
+		"key":     key,
+		"model":   "abac",
+	})
+}
+
+// updateABACPolicyHandler updates an existing ABAC policy
+func (s *AuthService) updateABACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	policyId := vars["id"]
+
+	var policy ABACPolicy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		http.Error(w, "Invalid JSON payload", http.StatusBadRequest)
+		return
+	}
+
+	policy.ID = policyId
+	policy.UpdatedAt = time.Now()
+
+	// Update policy in database
+	result := s.db.Save(&policy)
+	if result.Error != nil {
+		http.Error(w, fmt.Sprintf("Failed to update policy: %v", result.Error), http.StatusInternalServerError)
+		return
+	}
+
+	// Update conditions
+	s.db.Where("policy_id = ?", policyId).Delete(&PolicyCondition{})
+	for _, condition := range policy.Conditions {
+		condition.PolicyID = policyId
+		s.db.Create(&condition)
+	}
+
+	// Reload policy engine cache
+	s.policyEngine.LoadPolicies()
+
+	response := map[string]interface{}{
+		"message": "ABAC policy updated successfully",
+		"policy":  policy,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// deleteRelationshipHandler removes a relationship
+func (s *AuthService) deleteRelationshipHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	relationshipId := vars["id"]
+
+	// Parse relationship ID format: "subject:relationship:object"
+	parts := strings.Split(relationshipId, ":")
+	if len(parts) != 3 {
+		http.Error(w, "Relationship ID must be in format 'subject:relationship:object'", http.StatusBadRequest)
+		return
+	}
+
+	subject, relationship, object := parts[0], parts[1], parts[2]
+
+	// Remove from database
+	result := s.db.Where("subject = ? AND relationship = ? AND object = ?", subject, relationship, object).Delete(&RelationshipRecord{})
+	if result.Error != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete relationship: %v", result.Error), http.StatusInternalServerError)
+		return
+	}
+
+	if result.RowsAffected == 0 {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"removed": false,
+			"message": "Relationship not found",
+			"model":   "rebac",
+		})
+		return
+	}
+
+	// Remove from memory
+	key := fmt.Sprintf("%s:%s", subject, relationship)
+	if objects, exists := s.relationshipGraph.relationships[key]; exists {
+		for i, obj := range objects {
+			if obj.Object == object {
+				s.relationshipGraph.relationships[key] = append(objects[:i], objects[i+1:]...)
+				if len(s.relationshipGraph.relationships[key]) == 0 {
+					delete(s.relationshipGraph.relationships, key)
+				}
+				break
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"removed": true,
+		"message": "Relationship removed successfully",
+		"model":   "rebac",
+	})
+}
+
+// findRelationshipPathHandler finds relationship paths
+func (s *AuthService) findRelationshipPathHandler(w http.ResponseWriter, r *http.Request) {
+	subject := r.URL.Query().Get("subject")
+	object := r.URL.Query().Get("object")
+	maxDepthStr := r.URL.Query().Get("max_depth")
+
+	if subject == "" || object == "" {
+		http.Error(w, "subject and object parameters are required", http.StatusBadRequest)
+		return
+	}
+
+	maxDepth := 5
+	if maxDepthStr != "" {
+		if depth, err := strconv.Atoi(maxDepthStr); err == nil && depth > 0 {
+			maxDepth = depth
+		}
+	}
+
+	found, path := s.relationshipGraph.FindRelationshipPath(subject, object, maxDepth)
+
+	response := map[string]interface{}{
+		"found":     found,
+		"path":      path,
+		"subject":   subject,
+		"object":    object,
+		"max_depth": maxDepth,
+		"model":     "rebac",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
 // healthHandler provides a health check endpoint
 func (s *AuthService) healthHandler(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
@@ -1728,30 +2349,47 @@ func main() {
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/health", authService.healthHandler).Methods("GET")
 	api.HandleFunc("/models", authService.getModelsHandler).Methods("GET")
-	api.HandleFunc("/enforce", authService.enforceHandler).Methods("POST")
+	
+	// Authorization endpoint
+	api.HandleFunc("/authorizations", authService.authorizationHandler).Methods("POST")
 
-	// Endpoints for traditional models
-	api.HandleFunc("/policies", authService.addPolicyHandler).Methods("POST")
-	api.HandleFunc("/policies", authService.removePolicyHandler).Methods("DELETE")
-	api.HandleFunc("/policies", authService.getPoliciesHandler).Methods("GET")
-	api.HandleFunc("/roles", authService.addRoleHandler).Methods("POST")
-	api.HandleFunc("/users/roles", authService.getUserRolesHandler).Methods("GET")
-	api.HandleFunc("/users/attributes", authService.setUserAttributesHandler).Methods("POST")
-	api.HandleFunc("/users/attributes", authService.getUserAttributesHandler).Methods("GET")
-	api.HandleFunc("/objects/attributes", authService.setObjectAttributesHandler).Methods("POST")
-	api.HandleFunc("/objects/attributes", authService.getObjectAttributesHandler).Methods("GET")
+	// ACL Policy endpoints
+	api.HandleFunc("/acl/policies", authService.addACLPolicyHandler).Methods("POST")
+	api.HandleFunc("/acl/policies", authService.getACLPoliciesHandler).Methods("GET")
+	api.HandleFunc("/acl/policies/{id}", authService.deleteACLPolicyHandler).Methods("DELETE")
+
+	// RBAC Policy endpoints
+	api.HandleFunc("/rbac/policies", authService.addRBACPolicyHandler).Methods("POST")
+	api.HandleFunc("/rbac/policies", authService.getRBACPoliciesHandler).Methods("GET")
+	api.HandleFunc("/rbac/policies/{id}", authService.deleteRBACPolicyHandler).Methods("DELETE")
+
+	// User role endpoints
+	api.HandleFunc("/users/{userId}/roles", authService.addUserRoleHandler).Methods("POST")
+	api.HandleFunc("/users/{userId}/roles", authService.getUserRolesHandler).Methods("GET")
+	api.HandleFunc("/users/{userId}/roles/{roleId}", authService.deleteUserRoleHandler).Methods("DELETE")
+
+	// User attributes endpoints
+	api.HandleFunc("/users/{userId}/attributes", authService.setUserAttributesHandler).Methods("PUT")
+	api.HandleFunc("/users/{userId}/attributes", authService.getUserAttributesHandler).Methods("GET")
+	api.HandleFunc("/users/{userId}/attributes/{key}", authService.deleteUserAttributeHandler).Methods("DELETE")
+
+	// Object attributes endpoints
+	api.HandleFunc("/objects/{objectId}/attributes", authService.setObjectAttributesHandler).Methods("PUT")
+	api.HandleFunc("/objects/{objectId}/attributes", authService.getObjectAttributesHandler).Methods("GET")
+	api.HandleFunc("/objects/{objectId}/attributes/{key}", authService.deleteObjectAttributeHandler).Methods("DELETE")
 
 	// ABAC Policy Management endpoints
 	api.HandleFunc("/abac/policies", authService.addABACPolicyHandler).Methods("POST")
-	api.HandleFunc("/abac/policies", authService.removeABACPolicyHandler).Methods("DELETE")
 	api.HandleFunc("/abac/policies", authService.getABACPoliciesHandler).Methods("GET")
 	api.HandleFunc("/abac/policies/{id}", authService.getABACPolicyHandler).Methods("GET")
+	api.HandleFunc("/abac/policies/{id}", authService.updateABACPolicyHandler).Methods("PUT")
+	api.HandleFunc("/abac/policies/{id}", authService.deleteABACPolicyHandler).Methods("DELETE")
 
-	// ReBAC-specific endpoints
+	// ReBAC relationship endpoints
 	api.HandleFunc("/relationships", authService.addRelationshipHandler).Methods("POST")
-	api.HandleFunc("/relationships", authService.removeRelationshipHandler).Methods("DELETE")
 	api.HandleFunc("/relationships", authService.getRelationshipsHandler).Methods("GET")
-	api.HandleFunc("/relationships/path", authService.findPathHandler).Methods("GET")
+	api.HandleFunc("/relationships/{id}", authService.deleteRelationshipHandler).Methods("DELETE")
+	api.HandleFunc("/relationships/paths", authService.findRelationshipPathHandler).Methods("GET")
 
 	// Apply middleware
 	router.Use(corsMiddleware)

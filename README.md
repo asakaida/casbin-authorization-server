@@ -16,11 +16,13 @@ The service is built using the Casbin authorization library and provides RESTful
 ## 📚 Getting Started
 
 ### For Beginners
+
 If you're new to authorization systems, start with our comprehensive tutorial:
 
 **👉 [Complete Authorization Tutorial](./AUTHORIZATION_TUTORIAL.md)**
 
 This hands-on guide walks you through:
+
 - Understanding authorization concepts
 - Setting up a fictional company scenario (TechCorp Inc.)
 - Step-by-step examples for all 4 authorization models
@@ -28,6 +30,7 @@ This hands-on guide walks you through:
 - When to use each model in practice
 
 ### For Experienced Users
+
 Continue with the API documentation and technical details below.
 
 ## Features
@@ -111,7 +114,7 @@ curl http://localhost:8080/api/v1/models
 ### Authorization Check (All Models)
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rbac",
@@ -130,20 +133,34 @@ ACL provides direct user-to-resource permission mapping. Best for simple scenari
 #### Add ACL Policy
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/acl/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "acl",
     "subject": "alice",
     "object": "document1",
     "action": "read"
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Policy added successfully",
+  "policy": {
+    "subject": "alice",
+    "object": "document1",
+    "action": "read"
+  },
+  "model": "acl"
+}
+```
+
 #### Check ACL Permission
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "acl",
@@ -156,20 +173,36 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 #### List ACL Policies
 
 ```bash
-curl "http://localhost:8080/api/v1/policies?model=acl"
+curl http://localhost:8080/api/v1/acl/policies
+```
+
+Expected response:
+
+```json
+{
+  "policies": [
+    ["alice", "document1", "read"],
+    ["alice", "document1", "write"]
+  ],
+  "count": 2,
+  "model": "acl"
+}
 ```
 
 #### Remove ACL Policy
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "acl",
-    "subject": "alice",
-    "object": "document1",
-    "action": "read"
-  }'
+curl -X DELETE http://localhost:8080/api/v1/acl/policies/alice:document1:read
+```
+
+Expected response:
+
+```json
+{
+  "removed": true,
+  "message": "Policy removed successfully",
+  "model": "acl"
+}
 ```
 
 ### 2. RBAC (Role-Based Access Control)
@@ -179,31 +212,56 @@ RBAC organizes permissions through roles. Users are assigned roles, and roles ha
 #### Assign Role to User
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/roles \
+curl -X POST http://localhost:8080/api/v1/users/alice/roles \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "alice",
     "role": "admin"
   }'
+```
+
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Role added successfully",
+  "user": "alice",
+  "role": "admin",
+  "model": "rbac"
+}
 ```
 
 #### Add Role Permission
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "admin",
     "object": "data",
     "action": "write"
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Policy added successfully",
+  "policy": {
+    "subject": "admin",
+    "object": "data",
+    "action": "write"
+  },
+  "model": "rbac"
+}
+```
+
 #### Check RBAC Permission
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rbac",
@@ -216,13 +274,37 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 #### Get User Roles
 
 ```bash
-curl "http://localhost:8080/api/v1/users/roles?user=alice"
+curl http://localhost:8080/api/v1/users/alice/roles
+```
+
+Expected response:
+
+```json
+{
+  "user": "alice",
+  "roles": ["admin"],
+  "count": 1,
+  "model": "rbac"
+}
 ```
 
 #### List RBAC Policies
 
 ```bash
-curl "http://localhost:8080/api/v1/policies?model=rbac"
+curl http://localhost:8080/api/v1/rbac/policies
+```
+
+Expected response:
+
+```json
+{
+  "policies": [
+    ["admin", "data", "read"],
+    ["admin", "data", "write"]
+  ],
+  "count": 2,
+  "model": "rbac"
+}
 ```
 
 ### 3. ABAC (Attribute-Based Access Control)
@@ -235,7 +317,7 @@ Our ABAC implementation uses a powerful policy engine that supports:
 
 - **Dynamic Policies**: Configurable rules stored in database
 - **Multiple Operators**: eq, ne, gt, gte, lt, lte, in, contains, regex
-- **Logic Combinations**: AND/OR operations for complex conditions  
+- **Logic Combinations**: AND/OR operations for complex conditions
 - **Priority System**: Policy evaluation based on priority order
 - **Attribute Types**: User, object, environment, and action attributes
 - **Real-time Evaluation**: Context-aware authorization decisions
@@ -284,10 +366,9 @@ curl -X POST http://localhost:8080/api/v1/abac/policies \
 #### Set User Attributes
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/users/attributes \
+curl -X PUT http://localhost:8080/api/v1/users/bob/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "bob",
     "attributes": {
       "position": "manager",
       "department": "engineering"
@@ -295,13 +376,27 @@ curl -X POST http://localhost:8080/api/v1/users/attributes \
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "message": "User attributes set successfully",
+  "user": "bob",
+  "attributes": {
+    "position": "manager",
+    "department": "engineering"
+  },
+  "count": 2,
+  "model": "abac"
+}
+```
+
 #### Set Object Attributes
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/objects/attributes \
+curl -X PUT http://localhost:8080/api/v1/objects/project_docs/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "object": "project_docs",
     "attributes": {
       "department": "engineering",
       "classification": "internal"
@@ -309,10 +404,25 @@ curl -X POST http://localhost:8080/api/v1/objects/attributes \
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "message": "Object attributes set successfully",
+  "object": "project_docs",
+  "attributes": {
+    "department": "engineering",
+    "classification": "internal"
+  },
+  "count": 2,
+  "model": "abac"
+}
+```
+
 #### Check ABAC Permission
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "abac",
@@ -326,6 +436,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 ```
 
 Expected response:
+
 ```json
 {
   "allowed": true,
@@ -337,13 +448,41 @@ Expected response:
 #### Get User Attributes
 
 ```bash
-curl "http://localhost:8080/api/v1/users/attributes?user=bob"
+curl http://localhost:8080/api/v1/users/bob/attributes
+```
+
+Expected response:
+
+```json
+{
+  "user": "bob",
+  "attributes": {
+    "position": "manager",
+    "department": "engineering"
+  },
+  "count": 2,
+  "model": "abac"
+}
 ```
 
 #### Get Object Attributes
 
 ```bash
-curl "http://localhost:8080/api/v1/objects/attributes?object=project_docs"
+curl http://localhost:8080/api/v1/objects/project_docs/attributes
+```
+
+Expected response:
+
+```json
+{
+  "object": "project_docs",
+  "attributes": {
+    "department": "engineering",
+    "classification": "internal"
+  },
+  "count": 2,
+  "model": "abac"
+}
 ```
 
 #### List All ABAC Policies
@@ -361,11 +500,17 @@ curl "http://localhost:8080/api/v1/abac/policies/manager_access"
 #### Remove Policy
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/abac/policies \
-  -H "Content-Type: application/json" \
-  -d '{
-    "id": "manager_access"
-  }'
+curl -X DELETE http://localhost:8080/api/v1/abac/policies/manager_access
+```
+
+Expected response:
+
+```json
+{
+  "removed": true,
+  "message": "ABAC policy removed successfully",
+  "id": "manager_access"
+}
 ```
 
 ### 4. ReBAC (Relationship-Based Access Control)
@@ -423,7 +568,7 @@ curl -X POST http://localhost:8080/api/v1/relationships \
 #### Check ReBAC Permission
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rebac",
@@ -436,7 +581,20 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 #### Find Relationship Path
 
 ```bash
-curl "http://localhost:8080/api/v1/relationships/path?subject=alice&object=document1&max_depth=5"
+curl "http://localhost:8080/api/v1/relationships/paths?subject=alice&object=document1&max_depth=5"
+```
+
+Expected response:
+
+```json
+{
+  "found": true,
+  "path": "alice -[owner]-> document1",
+  "subject": "alice",
+  "object": "document1",
+  "max_depth": 5,
+  "model": "rebac"
+}
 ```
 
 #### List User Relationships
@@ -448,66 +606,121 @@ curl "http://localhost:8080/api/v1/relationships?subject=alice"
 #### Remove Relationship
 
 ```bash
-curl -X DELETE http://localhost:8080/api/v1/relationships \
-  -H "Content-Type: application/json" \
-  -d '{
-    "subject": "bob",
-    "relationship": "editor",
-    "object": "document1"
-  }'
+curl -X DELETE http://localhost:8080/api/v1/relationships/bob:editor:document1
 ```
 
-## API Endpoints
+Expected response:
+
+```json
+{
+  "removed": true,
+  "message": "Relationship removed successfully",
+  "model": "rebac"
+}
+```
+
+## RESTful API Endpoints
+
+The authorization service provides a complete RESTful API with resource-oriented endpoints and proper HTTP status codes.
 
 ### General Endpoints
 
-| Method | Endpoint          | Description                         |
-| ------ | ----------------- | ----------------------------------- |
-| GET    | `/api/v1/health`  | Health check                        |
-| GET    | `/api/v1/models`  | List supported authorization models |
-| POST   | `/api/v1/enforce` | Check authorization (all models)    |
+| Method | Endpoint                 | Description                         |
+| ------ | ------------------------ | ----------------------------------- |
+| GET    | `/api/v1/health`         | Health check                        |
+| GET    | `/api/v1/models`         | List supported authorization models |
+| POST   | `/api/v1/authorizations` | Check authorization (all models)    |
 
-### Policy Management (ACL/RBAC/ABAC)
+### ACL (Access Control List) Endpoints
 
-| Method | Endpoint                         | Description             |
-| ------ | -------------------------------- | ----------------------- |
-| POST   | `/api/v1/policies`               | Add policy              |
-| DELETE | `/api/v1/policies`               | Remove policy           |
-| GET    | `/api/v1/policies?model=<model>` | List policies for model |
+| Method | Endpoint                    | Description       |
+| ------ | --------------------------- | ----------------- |
+| POST   | `/api/v1/acl/policies`      | Add ACL policy    |
+| GET    | `/api/v1/acl/policies`      | List ACL policies |
+| DELETE | `/api/v1/acl/policies/{id}` | Remove ACL policy |
 
-### RBAC Specific
+**Policy ID format**: `subject:object:action` (e.g., `alice:document1:read`)
 
-| Method | Endpoint                          | Description         |
-| ------ | --------------------------------- | ------------------- |
-| POST   | `/api/v1/roles`                   | Assign role to user |
-| GET    | `/api/v1/users/roles?user=<user>` | Get user roles      |
+### RBAC (Role-Based Access Control) Endpoints
 
-### ABAC Specific
+#### Role Management
 
-| Method | Endpoint                                 | Description           |
-| ------ | ---------------------------------------- | --------------------- |
-| POST   | `/api/v1/users/attributes`               | Set user attributes   |
-| GET    | `/api/v1/users/attributes?user=<user>`   | Get user attributes   |
-| POST   | `/api/v1/objects/attributes`             | Set object attributes |
-| GET    | `/api/v1/objects/attributes?object=<id>` | Get object attributes |
+| Method | Endpoint                                | Description           |
+| ------ | --------------------------------------- | --------------------- |
+| POST   | `/api/v1/users/{userId}/roles`          | Assign role to user   |
+| GET    | `/api/v1/users/{userId}/roles`          | Get user roles        |
+| DELETE | `/api/v1/users/{userId}/roles/{roleId}` | Remove role from user |
 
-### ABAC Policy Management
+#### Policy Management
 
-| Method | Endpoint                        | Description               |
-| ------ | ------------------------------- | ------------------------- |
-| POST   | `/api/v1/abac/policies`         | Create ABAC policy        |
-| DELETE | `/api/v1/abac/policies`         | Remove ABAC policy        |
-| GET    | `/api/v1/abac/policies`         | List all ABAC policies    |
-| GET    | `/api/v1/abac/policies/{id}`    | Get specific ABAC policy  |
+| Method | Endpoint                     | Description        |
+| ------ | ---------------------------- | ------------------ |
+| POST   | `/api/v1/rbac/policies`      | Add RBAC policy    |
+| GET    | `/api/v1/rbac/policies`      | List RBAC policies |
+| DELETE | `/api/v1/rbac/policies/{id}` | Remove RBAC policy |
 
-### ReBAC Specific
+### ABAC (Attribute-Based Access Control) Endpoints
 
-| Method | Endpoint                                            | Description            |
-| ------ | --------------------------------------------------- | ---------------------- |
-| POST   | `/api/v1/relationships`                             | Add relationship       |
-| DELETE | `/api/v1/relationships`                             | Remove relationship    |
-| GET    | `/api/v1/relationships?subject=<subject>`           | List relationships     |
-| GET    | `/api/v1/relationships/path?subject=<s>&object=<o>` | Find relationship path |
+#### User Attributes
+
+| Method | Endpoint                                  | Description           |
+| ------ | ----------------------------------------- | --------------------- |
+| PUT    | `/api/v1/users/{userId}/attributes`       | Set user attributes   |
+| GET    | `/api/v1/users/{userId}/attributes`       | Get user attributes   |
+| DELETE | `/api/v1/users/{userId}/attributes/{key}` | Remove user attribute |
+
+#### Object Attributes
+
+| Method | Endpoint                                      | Description             |
+| ------ | --------------------------------------------- | ----------------------- |
+| PUT    | `/api/v1/objects/{objectId}/attributes`       | Set object attributes   |
+| GET    | `/api/v1/objects/{objectId}/attributes`       | Get object attributes   |
+| DELETE | `/api/v1/objects/{objectId}/attributes/{key}` | Remove object attribute |
+
+#### Policy Management
+
+| Method | Endpoint                     | Description              |
+| ------ | ---------------------------- | ------------------------ |
+| POST   | `/api/v1/abac/policies`      | Create ABAC policy       |
+| GET    | `/api/v1/abac/policies`      | List all ABAC policies   |
+| GET    | `/api/v1/abac/policies/{id}` | Get specific ABAC policy |
+| PUT    | `/api/v1/abac/policies/{id}` | Update ABAC policy       |
+| DELETE | `/api/v1/abac/policies/{id}` | Remove ABAC policy       |
+
+### ReBAC (Relationship-Based Access Control) Endpoints
+
+| Method | Endpoint                                             | Description            |
+| ------ | ---------------------------------------------------- | ---------------------- |
+| POST   | `/api/v1/relationships`                              | Add relationship       |
+| GET    | `/api/v1/relationships?subject=<subject>`            | List relationships     |
+| DELETE | `/api/v1/relationships/{id}`                         | Remove relationship    |
+| GET    | `/api/v1/relationships/paths?subject=<s>&object=<o>` | Find relationship path |
+
+**Relationship ID format**: `subject:relationship:object` (e.g., `alice:owner:document1`)
+
+### HTTP Status Codes
+
+The API uses standard HTTP status codes:
+
+- **200 OK**: Successful GET, PUT, DELETE operations
+- **201 Created**: Successful POST operations (resource created)
+- **400 Bad Request**: Invalid request payload or parameters
+- **404 Not Found**: Resource not found
+- **409 Conflict**: Resource already exists (duplicate policy/role)
+- **500 Internal Server Error**: Server-side error
+
+### Response Format
+
+All endpoints return JSON with consistent structure:
+
+```json
+{
+  "message": "Operation result message",
+  "data": "Resource-specific data",
+  "count": "Number of items (for lists)",
+  "model": "Authorization model used"
+}
+```
 
 ## ReBAC Relationship Types
 
@@ -528,12 +741,14 @@ The ReBAC model supports various relationship types:
 This authorization microservice is designed with scalability as a core principle:
 
 #### Database-First Persistence
+
 - **Full Data Persistence**: All authorization data (policies, roles, attributes, relationships) is stored in the database
 - **No Memory Dependencies**: Service can restart without data loss
 - **Horizontal Scaling**: Multiple service instances can share the same database
 - **Production Ready**: Supports millions of users, roles, and relationships
 
 #### Intelligent Caching Strategy
+
 - **Cache-First Reads**: Frequently accessed data is cached in memory for sub-millisecond response times
 - **Write-Through Updates**: All changes are immediately persisted to database and updated in cache
 - **Automatic Cache Management**: Cache is automatically populated and invalidated as needed
@@ -542,18 +757,21 @@ This authorization microservice is designed with scalability as a core principle
 #### Performance Optimizations
 
 ##### ABAC Attribute Management
+
 - **Persistent Storage**: User and object attributes stored in dedicated database tables with indexes
 - **Bulk Attribute Loading**: Efficient batch loading of user attributes for evaluation
 - **Attribute Caching**: Frequently accessed attributes cached for immediate evaluation
 - **Scalable for Millions**: Database design supports enterprise-scale attribute datasets
 
 ##### ReBAC Relationship Processing
+
 - **Graph Database Design**: Relationships stored with optimized indexes for fast traversal
 - **Path Discovery Algorithms**: Efficient breadth-first search for relationship path finding
 - **Relationship Caching**: Active relationship graphs cached for real-time authorization
 - **Complex Hierarchy Support**: Handles deep organizational hierarchies and social graphs
 
 ##### Database Performance
+
 - **Optimized Indexes**: Strategic database indexes on all query-critical columns
 - **Connection Pooling**: Efficient database connection management
 - **Query Optimization**: Minimized database round-trips through batch operations
@@ -591,7 +809,7 @@ The service uses SQLite (`casbin.db`) for persistent storage. All data is automa
 The service creates and manages the following tables:
 
 - `acl_rules`: ACL policies
-- `rbac_rules`: RBAC policies and roles  
+- `rbac_rules`: RBAC policies and roles
 - `abac_rules`: ABAC policies (pattern-based rules, legacy)
 - `abac_policies`: ABAC policy engine policies
 - `policy_conditions`: ABAC policy engine conditions
@@ -603,21 +821,21 @@ The service creates and manages the following tables:
 
 Stores Access Control List policies for direct user-resource permissions.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
+| Column  | Type         | Description                           |
+| ------- | ------------ | ------------------------------------- |
+| `id`    | INTEGER      | Primary key (auto-increment)          |
 | `ptype` | VARCHAR(100) | Policy type (always "p" for policies) |
-| `v0` | VARCHAR(100) | Subject (user) |
-| `v1` | VARCHAR(100) | Object (resource) |
-| `v2` | VARCHAR(100) | Action (permission) |
-| `v3` | VARCHAR(100) | Reserved for future use |
-| `v4` | VARCHAR(100) | Reserved for future use |
-| `v5` | VARCHAR(100) | Reserved for future use |
+| `v0`    | VARCHAR(100) | Subject (user)                        |
+| `v1`    | VARCHAR(100) | Object (resource)                     |
+| `v2`    | VARCHAR(100) | Action (permission)                   |
+| `v3`    | VARCHAR(100) | Reserved for future use               |
+| `v4`    | VARCHAR(100) | Reserved for future use               |
+| `v5`    | VARCHAR(100) | Reserved for future use               |
 
 **Example Data:**
 
 ```sql
-INSERT INTO acl_rules (ptype, v0, v1, v2) VALUES 
+INSERT INTO acl_rules (ptype, v0, v1, v2) VALUES
 ('p', 'alice', 'document1', 'read'),
 ('p', 'bob', 'document2', 'write');
 ```
@@ -626,27 +844,27 @@ INSERT INTO acl_rules (ptype, v0, v1, v2) VALUES
 
 Stores Role-Based Access Control policies and user-role assignments.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
+| Column  | Type         | Description                                              |
+| ------- | ------------ | -------------------------------------------------------- |
+| `id`    | INTEGER      | Primary key (auto-increment)                             |
 | `ptype` | VARCHAR(100) | Policy type ("p" for policies, "g" for role assignments) |
-| `v0` | VARCHAR(100) | Subject (user for "g", role for "p") |
-| `v1` | VARCHAR(100) | Role (for "g") or Object (for "p") |
-| `v2` | VARCHAR(100) | Action (for "p" policies only) |
-| `v3` | VARCHAR(100) | Reserved for future use |
-| `v4` | VARCHAR(100) | Reserved for future use |
-| `v5` | VARCHAR(100) | Reserved for future use |
+| `v0`    | VARCHAR(100) | Subject (user for "g", role for "p")                     |
+| `v1`    | VARCHAR(100) | Role (for "g") or Object (for "p")                       |
+| `v2`    | VARCHAR(100) | Action (for "p" policies only)                           |
+| `v3`    | VARCHAR(100) | Reserved for future use                                  |
+| `v4`    | VARCHAR(100) | Reserved for future use                                  |
+| `v5`    | VARCHAR(100) | Reserved for future use                                  |
 
 **Example Data:**
 
 ```sql
 -- Role assignments (ptype = 'g')
-INSERT INTO rbac_rules (ptype, v0, v1) VALUES 
+INSERT INTO rbac_rules (ptype, v0, v1) VALUES
 ('g', 'alice', 'admin'),
 ('g', 'bob', 'user');
 
 -- Role permissions (ptype = 'p')
-INSERT INTO rbac_rules (ptype, v0, v1, v2) VALUES 
+INSERT INTO rbac_rules (ptype, v0, v1, v2) VALUES
 ('p', 'admin', 'data', 'read'),
 ('p', 'admin', 'data', 'write'),
 ('p', 'user', 'data', 'read');
@@ -656,16 +874,16 @@ INSERT INTO rbac_rules (ptype, v0, v1, v2) VALUES
 
 Stores Attribute-Based Access Control policies (currently uses the same structure as ACL for pattern matching).
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
+| Column  | Type         | Description                           |
+| ------- | ------------ | ------------------------------------- |
+| `id`    | INTEGER      | Primary key (auto-increment)          |
 | `ptype` | VARCHAR(100) | Policy type (always "p" for policies) |
-| `v0` | VARCHAR(100) | Subject pattern |
-| `v1` | VARCHAR(100) | Object pattern |
-| `v2` | VARCHAR(100) | Action pattern |
-| `v3` | VARCHAR(100) | Reserved for future use |
-| `v4` | VARCHAR(100) | Reserved for future use |
-| `v5` | VARCHAR(100) | Reserved for future use |
+| `v0`    | VARCHAR(100) | Subject pattern                       |
+| `v1`    | VARCHAR(100) | Object pattern                        |
+| `v2`    | VARCHAR(100) | Action pattern                        |
+| `v3`    | VARCHAR(100) | Reserved for future use               |
+| `v4`    | VARCHAR(100) | Reserved for future use               |
+| `v5`    | VARCHAR(100) | Reserved for future use               |
 
 **Implementation Note:** ABAC uses a persistent storage approach with caching:
 
@@ -681,20 +899,20 @@ This design provides both scalability for large datasets and performance for rea
 
 Stores the main policy definitions for the ABAC policy engine.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | VARCHAR(255) | Primary key (policy ID) |
-| `name` | VARCHAR(255) | Human-readable policy name |
-| `description` | TEXT | Policy description |
-| `effect` | VARCHAR(10) | Policy effect ("allow" or "deny") |
-| `priority` | INTEGER | Policy priority (higher = evaluated first) |
-| `created_at` | DATETIME | Record creation timestamp |
-| `updated_at` | DATETIME | Record last update timestamp |
+| Column        | Type         | Description                                |
+| ------------- | ------------ | ------------------------------------------ |
+| `id`          | VARCHAR(255) | Primary key (policy ID)                    |
+| `name`        | VARCHAR(255) | Human-readable policy name                 |
+| `description` | TEXT         | Policy description                         |
+| `effect`      | VARCHAR(10)  | Policy effect ("allow" or "deny")          |
+| `priority`    | INTEGER      | Policy priority (higher = evaluated first) |
+| `created_at`  | DATETIME     | Record creation timestamp                  |
+| `updated_at`  | DATETIME     | Record last update timestamp               |
 
 **Example Data:**
 
 ```sql
-INSERT INTO abac_policies (id, name, description, effect, priority) VALUES 
+INSERT INTO abac_policies (id, name, description, effect, priority) VALUES
 ('executive_access', 'Executive Access', 'CEOs can access all data from office', 'allow', 100),
 ('clearance_access', 'Clearance-based Access', 'Users with sufficient clearance', 'allow', 90),
 ('department_access', 'Department Access', 'Same-department resource access', 'allow', 80);
@@ -704,15 +922,15 @@ INSERT INTO abac_policies (id, name, description, effect, priority) VALUES
 
 Stores the conditions for each policy in the ABAC policy engine.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
-| `policy_id` | VARCHAR(255) | Foreign key to `abac_policies.id` |
-| `type` | VARCHAR(50) | Condition type ("user", "object", "environment", "action") |
-| `field` | VARCHAR(100) | Attribute name |
-| `operator` | VARCHAR(20) | Comparison operator (eq, ne, gt, gte, lt, lte, in, contains, regex) |
-| `value` | VARCHAR(255) | Comparison value |
-| `logic_op` | VARCHAR(10) | Logic operator for combining with next condition ("and", "or") |
+| Column      | Type         | Description                                                         |
+| ----------- | ------------ | ------------------------------------------------------------------- |
+| `id`        | INTEGER      | Primary key (auto-increment)                                        |
+| `policy_id` | VARCHAR(255) | Foreign key to `abac_policies.id`                                   |
+| `type`      | VARCHAR(50)  | Condition type ("user", "object", "environment", "action")          |
+| `field`     | VARCHAR(100) | Attribute name                                                      |
+| `operator`  | VARCHAR(20)  | Comparison operator (eq, ne, gt, gte, lt, lte, in, contains, regex) |
+| `value`     | VARCHAR(255) | Comparison value                                                    |
+| `logic_op`  | VARCHAR(10)  | Logic operator for combining with next condition ("and", "or")      |
 
 **Indexes:**
 
@@ -722,7 +940,7 @@ Stores the conditions for each policy in the ABAC policy engine.
 **Example Data:**
 
 ```sql
-INSERT INTO policy_conditions (policy_id, type, field, operator, value, logic_op) VALUES 
+INSERT INTO policy_conditions (policy_id, type, field, operator, value, logic_op) VALUES
 ('executive_access', 'user', 'position', 'eq', 'ceo', 'and'),
 ('executive_access', 'environment', 'location', 'eq', 'office', ''),
 ('clearance_access', 'user', 'clearance', 'in', 'secret,top_secret', 'and'),
@@ -733,14 +951,14 @@ INSERT INTO policy_conditions (policy_id, type, field, operator, value, logic_op
 
 Stores user attributes for Attribute-Based Access Control with full persistence.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
-| `user_id` | VARCHAR(255) | User identifier |
-| `attribute` | VARCHAR(255) | Attribute name (e.g., "department", "clearance") |
-| `value` | VARCHAR(255) | Attribute value |
-| `created_at` | DATETIME | Record creation timestamp |
-| `updated_at` | DATETIME | Record last update timestamp |
+| Column       | Type         | Description                                      |
+| ------------ | ------------ | ------------------------------------------------ |
+| `id`         | INTEGER      | Primary key (auto-increment)                     |
+| `user_id`    | VARCHAR(255) | User identifier                                  |
+| `attribute`  | VARCHAR(255) | Attribute name (e.g., "department", "clearance") |
+| `value`      | VARCHAR(255) | Attribute value                                  |
+| `created_at` | DATETIME     | Record creation timestamp                        |
+| `updated_at` | DATETIME     | Record last update timestamp                     |
 
 **Indexes:**
 
@@ -750,7 +968,7 @@ Stores user attributes for Attribute-Based Access Control with full persistence.
 **Example Data:**
 
 ```sql
-INSERT INTO user_attributes (user_id, attribute, value) VALUES 
+INSERT INTO user_attributes (user_id, attribute, value) VALUES
 ('alice', 'department', 'hr'),
 ('alice', 'clearance', 'high'),
 ('alice', 'position', 'manager'),
@@ -762,14 +980,14 @@ INSERT INTO user_attributes (user_id, attribute, value) VALUES
 
 Stores object attributes for Attribute-Based Access Control.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
-| `object_id` | VARCHAR(255) | Object identifier |
-| `attribute` | VARCHAR(255) | Attribute name (e.g., "classification", "sensitivity") |
-| `value` | VARCHAR(255) | Attribute value |
-| `created_at` | DATETIME | Record creation timestamp |
-| `updated_at` | DATETIME | Record last update timestamp |
+| Column       | Type         | Description                                            |
+| ------------ | ------------ | ------------------------------------------------------ |
+| `id`         | INTEGER      | Primary key (auto-increment)                           |
+| `object_id`  | VARCHAR(255) | Object identifier                                      |
+| `attribute`  | VARCHAR(255) | Attribute name (e.g., "classification", "sensitivity") |
+| `value`      | VARCHAR(255) | Attribute value                                        |
+| `created_at` | DATETIME     | Record creation timestamp                              |
+| `updated_at` | DATETIME     | Record last update timestamp                           |
 
 **Indexes:**
 
@@ -779,7 +997,7 @@ Stores object attributes for Attribute-Based Access Control.
 **Example Data:**
 
 ```sql
-INSERT INTO object_attributes (object_id, attribute, value) VALUES 
+INSERT INTO object_attributes (object_id, attribute, value) VALUES
 ('confidential_data', 'classification', 'confidential'),
 ('confidential_data', 'department', 'hr'),
 ('confidential_data', 'sensitivity', 'high'),
@@ -790,14 +1008,14 @@ INSERT INTO object_attributes (object_id, attribute, value) VALUES
 
 Stores Relationship-Based Access Control relationships for graph-based authorization.
 
-| Column | Type | Description |
-|--------|------|-------------|
-| `id` | INTEGER | Primary key (auto-increment) |
-| `subject` | VARCHAR(255) | Subject entity (user, group, or object) |
-| `relationship` | VARCHAR(255) | Type of relationship |
-| `object` | VARCHAR(255) | Target object or entity |
-| `created_at` | DATETIME | Record creation timestamp |
-| `updated_at` | DATETIME | Record last update timestamp |
+| Column         | Type         | Description                             |
+| -------------- | ------------ | --------------------------------------- |
+| `id`           | INTEGER      | Primary key (auto-increment)            |
+| `subject`      | VARCHAR(255) | Subject entity (user, group, or object) |
+| `relationship` | VARCHAR(255) | Type of relationship                    |
+| `object`       | VARCHAR(255) | Target object or entity                 |
+| `created_at`   | DATETIME     | Record creation timestamp               |
+| `updated_at`   | DATETIME     | Record last update timestamp            |
 
 **Indexes:**
 
@@ -808,7 +1026,7 @@ Stores Relationship-Based Access Control relationships for graph-based authoriza
 **Example Data:**
 
 ```sql
-INSERT INTO relationship_records (subject, relationship, object) VALUES 
+INSERT INTO relationship_records (subject, relationship, object) VALUES
 ('alice', 'owner', 'document1'),
 ('bob', 'editor', 'document1'),
 ('charlie', 'viewer', 'document1'),

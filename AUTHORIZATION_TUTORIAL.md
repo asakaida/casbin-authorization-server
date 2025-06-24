@@ -151,23 +151,36 @@ At TechCorp, we want to give specific permissions to individual employees:
 Let's give Alice (CEO) access to the strategic planning document:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/acl/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "acl",
     "subject": "alice",
     "object": "company_strategy.pdf",
     "action": "read"
   }'
 ```
 
+Expected response:
+
+```json
+{
+  "added": true,
+  "message": "Policy added successfully",
+  "policy": {
+    "subject": "alice",
+    "object": "company_strategy.pdf",
+    "action": "read"
+  },
+  "model": "acl"
+}
+```
+
 Give Alice write permission too:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/acl/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "acl",
     "subject": "alice",
     "object": "company_strategy.pdf",
     "action": "write"
@@ -177,10 +190,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Give Diana (HR Manager) access to employee records:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/acl/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "acl",
     "subject": "diana",
     "object": "employee_records.xlsx",
     "action": "read"
@@ -188,10 +200,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/acl/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "acl",
     "subject": "diana",
     "object": "employee_records.xlsx",
     "action": "write"
@@ -201,10 +212,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Give Charlie (Engineer) read access to source code:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/acl/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "acl",
     "subject": "charlie",
     "object": "source_code.zip",
     "action": "read"
@@ -216,7 +226,7 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Let's test if Alice can read the strategy document:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "acl",
@@ -239,7 +249,7 @@ Expected response:
 Test if Charlie can read employee records (should be denied):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "acl",
@@ -262,7 +272,7 @@ Expected response:
 ### Step 3: View All ACL Policies
 
 ```bash
-curl "http://localhost:8080/api/v1/policies?model=acl"
+curl http://localhost:8080/api/v1/acl/policies
 ```
 
 Expected response:
@@ -276,6 +286,7 @@ Expected response:
     ["diana", "employee_records.xlsx", "write"],
     ["charlie", "source_code.zip", "read"]
   ],
+  "count": 5,
   "model": "acl"
 }
 ```
@@ -311,10 +322,9 @@ At TechCorp, instead of managing individual permissions, we'll create roles base
 Assign Alice the "ceo" role:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/roles \
+curl -X POST http://localhost:8080/api/v1/users/alice/roles \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "alice",
     "role": "ceo"
   }'
 ```
@@ -325,6 +335,8 @@ Expected response:
 {
   "added": true,
   "message": "Role added successfully",
+  "user": "alice",
+  "role": "ceo",
   "model": "rbac"
 }
 ```
@@ -332,10 +344,9 @@ Expected response:
 Assign Bob the "manager" role:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/roles \
+curl -X POST http://localhost:8080/api/v1/users/bob/roles \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "bob",
     "role": "manager"
   }'
 ```
@@ -346,6 +357,8 @@ Expected response:
 {
   "added": true,
   "message": "Role added successfully",
+  "user": "bob",
+  "role": "manager",
   "model": "rbac"
 }
 ```
@@ -353,10 +366,9 @@ Expected response:
 Assign Charlie the "engineer" role:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/roles \
+curl -X POST http://localhost:8080/api/v1/users/charlie/roles \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "charlie",
     "role": "engineer"
   }'
 ```
@@ -367,6 +379,8 @@ Expected response:
 {
   "added": true,
   "message": "Role added successfully",
+  "user": "charlie",
+  "role": "engineer",
   "model": "rbac"
 }
 ```
@@ -374,10 +388,9 @@ Expected response:
 Assign Diana the "hr_manager" role:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/roles \
+curl -X POST http://localhost:8080/api/v1/users/diana/roles \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "diana",
     "role": "hr_manager"
   }'
 ```
@@ -388,6 +401,8 @@ Expected response:
 {
   "added": true,
   "message": "Role added successfully",
+  "user": "diana",
+  "role": "hr_manager",
   "model": "rbac"
 }
 ```
@@ -395,10 +410,9 @@ Expected response:
 Assign Frank the "engineer" role too:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/roles \
+curl -X POST http://localhost:8080/api/v1/users/frank/roles \
   -H "Content-Type: application/json" \
   -d '{
-    "user": "frank",
     "role": "engineer"
   }'
 ```
@@ -409,6 +423,8 @@ Expected response:
 {
   "added": true,
   "message": "Role added successfully",
+  "user": "frank",
+  "role": "engineer",
   "model": "rbac"
 }
 ```
@@ -418,10 +434,9 @@ Expected response:
 Give the "ceo" role access to everything:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "ceo",
     "object": "company_strategy.pdf",
     "action": "read"
@@ -429,10 +444,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "ceo",
     "object": "company_strategy.pdf",
     "action": "write"
@@ -440,10 +454,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "ceo",
     "object": "sales_reports.pdf",
     "action": "read"
@@ -453,10 +466,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Give "hr_manager" role access to employee records:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "hr_manager",
     "object": "employee_records.xlsx",
     "action": "read"
@@ -464,10 +476,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "hr_manager",
     "object": "employee_records.xlsx",
     "action": "write"
@@ -477,10 +488,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Give "engineer" role access to source code:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "engineer",
     "object": "source_code.zip",
     "action": "read"
@@ -488,10 +498,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "engineer",
     "object": "engineering_docs.md",
     "action": "read"
@@ -501,10 +510,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Give "manager" role broader access:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "manager",
     "object": "source_code.zip",
     "action": "read"
@@ -512,10 +520,9 @@ curl -X POST http://localhost:8080/api/v1/policies \
 ```
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/policies \
+curl -X POST http://localhost:8080/api/v1/rbac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "model": "rbac",
     "subject": "manager",
     "object": "engineering_docs.md",
     "action": "write"
@@ -527,7 +534,7 @@ curl -X POST http://localhost:8080/api/v1/policies \
 Test if Alice (CEO) can read the strategy document:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rbac",
@@ -540,7 +547,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 Test if Charlie (Engineer) can access source code:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rbac",
@@ -553,7 +560,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 Test if Charlie can access employee records (should be denied):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rbac",
@@ -568,7 +575,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 See what roles Alice has:
 
 ```bash
-curl "http://localhost:8080/api/v1/users/roles?user=alice"
+curl http://localhost:8080/api/v1/users/alice/roles
 ```
 
 Expected response:
@@ -577,6 +584,7 @@ Expected response:
 {
   "user": "alice",
   "roles": ["ceo"],
+  "count": 1,
   "model": "rbac"
 }
 ```
@@ -584,7 +592,7 @@ Expected response:
 See what roles Charlie has:
 
 ```bash
-curl "http://localhost:8080/api/v1/users/roles?user=charlie"
+curl http://localhost:8080/api/v1/users/charlie/roles
 ```
 
 Expected response:
@@ -593,6 +601,7 @@ Expected response:
 {
   "user": "charlie",
   "roles": ["engineer"],
+  "count": 1,
   "model": "rbac"
 }
 ```
@@ -707,10 +716,9 @@ Expected response:
 Set attributes for Bob (Engineering Manager):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/users/attributes \
+curl -X PUT http://localhost:8080/api/v1/users/bob/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "bob",
     "attributes": {
       "department": "engineering",
       "position": "manager"
@@ -723,11 +731,12 @@ Expected response:
 ```json
 {
   "message": "User attributes set successfully",
-  "subject": "bob",
+  "user": "bob",
   "attributes": {
     "department": "engineering",
     "position": "manager"
   },
+  "count": 2,
   "model": "abac"
 }
 ```
@@ -735,10 +744,9 @@ Expected response:
 Set attributes for Charlie (Engineer):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/users/attributes \
+curl -X PUT http://localhost:8080/api/v1/users/charlie/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "charlie",
     "attributes": {
       "department": "engineering",
       "position": "engineer"
@@ -751,10 +759,9 @@ curl -X POST http://localhost:8080/api/v1/users/attributes \
 Set attributes for engineering project documents:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/objects/attributes \
+curl -X PUT http://localhost:8080/api/v1/objects/project_docs/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "object": "project_docs",
     "attributes": {
       "department": "engineering",
       "classification": "internal"
@@ -772,6 +779,7 @@ Expected response:
     "department": "engineering",
     "classification": "internal"
   },
+  "count": 2,
   "model": "abac"
 }
 ```
@@ -783,7 +791,7 @@ The ABAC model uses the policy engine to evaluate authorization requests based o
 Test if Bob (manager) can access engineering project documents:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "abac",
@@ -809,7 +817,7 @@ Expected response:
 Test if Charlie (engineer, not manager) can access the same documents:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "abac",
@@ -839,8 +847,9 @@ The policy engine evaluates policies in priority order (highest first) and retur
 1. **Priority 100**: Manager Department Access policy
 
 This policy evaluates the following conditions using AND logic:
+
 - User position must equal "manager"
-- User department must equal "engineering" 
+- User department must equal "engineering"
 - Object department must equal "engineering"
 
 For Bob: ✅ position=manager, department=engineering → conditions met → access granted
@@ -867,7 +876,7 @@ Create additional policies as needed for your business logic.
 Check Bob's attributes:
 
 ```bash
-curl "http://localhost:8080/api/v1/users/attributes?user=bob"
+curl http://localhost:8080/api/v1/users/bob/attributes
 ```
 
 Expected response:
@@ -879,6 +888,7 @@ Expected response:
     "department": "engineering",
     "position": "manager"
   },
+  "count": 2,
   "model": "abac"
 }
 ```
@@ -886,7 +896,7 @@ Expected response:
 Check object attributes:
 
 ```bash
-curl "http://localhost:8080/api/v1/objects/attributes?object=project_docs"
+curl http://localhost:8080/api/v1/objects/project_docs/attributes
 ```
 
 Expected response:
@@ -898,6 +908,7 @@ Expected response:
     "department": "engineering",
     "classification": "internal"
   },
+  "count": 2,
   "model": "abac"
 }
 ```
@@ -957,7 +968,7 @@ curl -X POST http://localhost:8080/api/v1/abac/policies \
 **Key Features:**
 
 - **Complete Flexibility**: Define any authorization logic through custom policies
-- **Business Rule Engine**: Implement complex business rules as authorization policies  
+- **Business Rule Engine**: Implement complex business rules as authorization policies
 - **API-Driven**: All policy management through RESTful APIs
 - **Production Ready**: Built for enterprise-scale authorization needs
 
@@ -1133,7 +1144,7 @@ curl -X POST http://localhost:8080/api/v1/relationships \
 Test if Alice can write to the strategy document (as owner):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rebac",
@@ -1146,7 +1157,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 Test if Charlie can read source code (via team membership):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rebac",
@@ -1159,7 +1170,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 Test if Charlie can edit engineering docs (as editor):
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
+curl -X POST http://localhost:8080/api/v1/authorizations \
   -H "Content-Type: application/json" \
   -d '{
     "model": "rebac",
@@ -1174,7 +1185,7 @@ curl -X POST http://localhost:8080/api/v1/enforce \
 Find how Charlie can access source code:
 
 ```bash
-curl "http://localhost:8080/api/v1/relationships/path?subject=charlie&object=source_code.zip&max_depth=5"
+curl "http://localhost:8080/api/v1/relationships/paths?subject=charlie&object=source_code.zip&max_depth=5"
 ```
 
 Expected response:
