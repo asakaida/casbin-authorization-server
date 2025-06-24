@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -69,6 +70,46 @@ type ResBACQueryRequest struct {
 	Subject string `json:"subject"`
 	Object  string `json:"object"`
 	Action  string `json:"action"`
+}
+
+// ABACPolicy represents a policy in the ABAC policy engine
+type ABACPolicy struct {
+	ID          string            `json:"id" gorm:"primaryKey"`
+	Name        string            `json:"name"`
+	Description string            `json:"description"`
+	Effect      string            `json:"effect"` // "allow" or "deny"
+	Priority    int               `json:"priority"`
+	Conditions  []PolicyCondition `json:"conditions" gorm:"foreignKey:PolicyID"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
+}
+
+// PolicyCondition represents a condition within a policy
+type PolicyCondition struct {
+	ID       uint   `json:"id" gorm:"primaryKey"`
+	PolicyID string `json:"policy_id" gorm:"index"`
+	Type     string `json:"type"`     // "user", "object", "environment", "action"
+	Field    string `json:"field"`    // attribute name
+	Operator string `json:"operator"` // "eq", "ne", "gt", "gte", "lt", "lte", "in", "contains", "startswith", "endswith"
+	Value    string `json:"value"`    // comparison value
+	LogicOp  string `json:"logic_op"` // "and", "or" (for combining with next condition)
+}
+
+// PolicyEvaluationContext holds all data needed for policy evaluation
+type PolicyEvaluationContext struct {
+	UserAttributes        map[string]string
+	ObjectAttributes      map[string]string
+	EnvironmentAttributes map[string]string
+	ActionAttributes      map[string]string
+	Subject               string
+	Object                string
+	Action                string
+}
+
+// PolicyEngine handles ABAC policy evaluation
+type PolicyEngine struct {
+	policies map[string]*ABACPolicy
+	db       *gorm.DB
 }
 
 // EnforceResponse represents the response for an enforcement request
@@ -406,6 +447,7 @@ type AuthService struct {
 	userAttrs         map[string]map[string]string // User attributes cache for ABAC
 	objectAttrs       map[string]map[string]string // Object attributes cache for ABAC
 	relationshipGraph *RelationshipGraph           // Relationship graph for ReBAC
+	policyEngine      *PolicyEngine                // ABAC policy engine
 	db                *gorm.DB                     // Database connection for ABAC persistence
 }
 
@@ -513,16 +555,23 @@ func NewAuthService() (*AuthService, error) {
 	rbacEnforcer.EnableAutoSave(true)
 	abacEnforcer.EnableAutoSave(true)
 
-	// Auto-migrate ABAC attribute tables
-	err = db.AutoMigrate(&UserAttribute{}, &ObjectAttribute{})
+	// Auto-migrate ABAC attribute tables and policy engine tables
+	err = db.AutoMigrate(&UserAttribute{}, &ObjectAttribute{}, &ABACPolicy{}, &PolicyCondition{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to migrate ABAC attribute tables: %v", err)
+		return nil, fmt.Errorf("failed to migrate ABAC tables: %v", err)
 	}
 
 	// Create relationship graph with database persistence
 	relationshipGraph, err := NewRelationshipGraph(db)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create relationship graph: %v", err)
+	}
+
+	// Create and initialize policy engine
+	policyEngine := NewPolicyEngine(db)
+	err = policyEngine.LoadPolicies()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load policies: %v", err)
 	}
 
 	service := &AuthService{
@@ -532,6 +581,7 @@ func NewAuthService() (*AuthService, error) {
 		userAttrs:         make(map[string]map[string]string),
 		objectAttrs:       make(map[string]map[string]string),
 		relationshipGraph: relationshipGraph,
+		policyEngine:      policyEngine,
 		db:                db,
 	}
 
@@ -661,6 +711,230 @@ func (s *AuthService) getUserAttributesFromDB(userID string) (map[string]string,
 	return attributes, nil
 }
 
+// NewPolicyEngine creates a new ABAC policy engine
+func NewPolicyEngine(db *gorm.DB) *PolicyEngine {
+	return &PolicyEngine{
+		policies: make(map[string]*ABACPolicy),
+		db:       db,
+	}
+}
+
+// LoadPolicies loads all policies from database into memory
+func (pe *PolicyEngine) LoadPolicies() error {
+	var policies []ABACPolicy
+	if err := pe.db.Preload("Conditions").Find(&policies).Error; err != nil {
+		return fmt.Errorf("failed to load policies: %v", err)
+	}
+
+	pe.policies = make(map[string]*ABACPolicy)
+	for _, policy := range policies {
+		pe.policies[policy.ID] = &policy
+	}
+
+	return nil
+}
+
+// AddPolicy adds a new policy to the engine
+func (pe *PolicyEngine) AddPolicy(policy *ABACPolicy) error {
+	// Save to database
+	if err := pe.db.Create(policy).Error; err != nil {
+		return fmt.Errorf("failed to save policy: %v", err)
+	}
+
+	// Add to memory cache
+	pe.policies[policy.ID] = policy
+	return nil
+}
+
+// RemovePolicy removes a policy from the engine
+func (pe *PolicyEngine) RemovePolicy(policyID string) error {
+	// Remove from database
+	if err := pe.db.Delete(&ABACPolicy{}, "id = ?", policyID).Error; err != nil {
+		return fmt.Errorf("failed to delete policy: %v", err)
+	}
+
+	// Remove conditions
+	if err := pe.db.Delete(&PolicyCondition{}, "policy_id = ?", policyID).Error; err != nil {
+		return fmt.Errorf("failed to delete policy conditions: %v", err)
+	}
+
+	// Remove from memory cache
+	delete(pe.policies, policyID)
+	return nil
+}
+
+// Evaluate evaluates all policies against the given context
+func (pe *PolicyEngine) Evaluate(ctx *PolicyEvaluationContext) (bool, string) {
+	// Sort policies by priority (higher priority first)
+	var sortedPolicies []*ABACPolicy
+	for _, policy := range pe.policies {
+		sortedPolicies = append(sortedPolicies, policy)
+	}
+
+	// Simple sort by priority (descending)
+	for i := 0; i < len(sortedPolicies); i++ {
+		for j := i + 1; j < len(sortedPolicies); j++ {
+			if sortedPolicies[i].Priority < sortedPolicies[j].Priority {
+				sortedPolicies[i], sortedPolicies[j] = sortedPolicies[j], sortedPolicies[i]
+			}
+		}
+	}
+
+	// Evaluate policies in priority order
+	for _, policy := range sortedPolicies {
+		if pe.evaluatePolicy(policy, ctx) {
+			if policy.Effect == "allow" {
+				return true, fmt.Sprintf("Access granted by policy: %s", policy.Name)
+			} else if policy.Effect == "deny" {
+				return false, fmt.Sprintf("Access denied by policy: %s", policy.Name)
+			}
+		}
+	}
+
+	// Default deny if no policy matches
+	return false, "No policy grants access"
+}
+
+// evaluatePolicy evaluates a single policy against the context
+func (pe *PolicyEngine) evaluatePolicy(policy *ABACPolicy, ctx *PolicyEvaluationContext) bool {
+	if len(policy.Conditions) == 0 {
+		return false
+	}
+
+	result := true
+	currentLogicOp := "and" // Start with AND logic
+
+	for i, condition := range policy.Conditions {
+		conditionResult := pe.evaluateCondition(&condition, ctx)
+
+		if i == 0 {
+			result = conditionResult
+		} else {
+			if currentLogicOp == "and" {
+				result = result && conditionResult
+			} else { // "or"
+				result = result || conditionResult
+			}
+		}
+
+		// Set logic operator for next iteration
+		if condition.LogicOp != "" {
+			currentLogicOp = condition.LogicOp
+		}
+	}
+
+	return result
+}
+
+// evaluateCondition evaluates a single condition
+func (pe *PolicyEngine) evaluateCondition(condition *PolicyCondition, ctx *PolicyEvaluationContext) bool {
+	var actualValue string
+
+	// Get the actual value based on condition type
+	switch condition.Type {
+	case "user":
+		actualValue = ctx.UserAttributes[condition.Field]
+	case "object":
+		actualValue = ctx.ObjectAttributes[condition.Field]
+	case "environment":
+		actualValue = ctx.EnvironmentAttributes[condition.Field]
+	case "action":
+		if condition.Field == "action" {
+			actualValue = ctx.Action
+		} else {
+			actualValue = ctx.ActionAttributes[condition.Field]
+		}
+	case "subject":
+		if condition.Field == "subject" {
+			actualValue = ctx.Subject
+		}
+	case "resource":
+		if condition.Field == "object" {
+			actualValue = ctx.Object
+		}
+	default:
+		return false
+	}
+
+	// Evaluate based on operator
+	return pe.evaluateOperator(actualValue, condition.Operator, condition.Value)
+}
+
+// evaluateOperator performs the actual comparison
+func (pe *PolicyEngine) evaluateOperator(actual, operator, expected string) bool {
+	switch operator {
+	case "eq":
+		return actual == expected
+	case "ne":
+		return actual != expected
+	case "gt":
+		return pe.compareNumeric(actual, expected) > 0
+	case "gte":
+		return pe.compareNumeric(actual, expected) >= 0
+	case "lt":
+		return pe.compareNumeric(actual, expected) < 0
+	case "lte":
+		return pe.compareNumeric(actual, expected) <= 0
+	case "in":
+		return pe.evaluateIn(actual, expected)
+	case "contains":
+		return strings.Contains(actual, expected)
+	case "startswith":
+		return strings.HasPrefix(actual, expected)
+	case "endswith":
+		return strings.HasSuffix(actual, expected)
+	case "regex":
+		matched, _ := regexp.MatchString(expected, actual)
+		return matched
+	default:
+		return false
+	}
+}
+
+// compareNumeric compares two string values as numbers
+func (pe *PolicyEngine) compareNumeric(actual, expected string) int {
+	actualNum, err1 := strconv.ParseFloat(actual, 64)
+	expectedNum, err2 := strconv.ParseFloat(expected, 64)
+
+	if err1 != nil || err2 != nil {
+		// Fallback to string comparison
+		return strings.Compare(actual, expected)
+	}
+
+	if actualNum > expectedNum {
+		return 1
+	} else if actualNum < expectedNum {
+		return -1
+	}
+	return 0
+}
+
+// evaluateIn checks if actual value is in the comma-separated list
+func (pe *PolicyEngine) evaluateIn(actual, expectedList string) bool {
+	values := strings.Split(expectedList, ",")
+	for _, value := range values {
+		if strings.TrimSpace(value) == actual {
+			return true
+		}
+	}
+	return false
+}
+
+// getObjectAttributes retrieves object attributes from cache
+func (s *AuthService) getObjectAttributes(objectID string) map[string]string {
+	// Return a copy of the attributes map to avoid concurrent modification issues
+	if attrs, exists := s.objectAttrs[objectID]; exists {
+		result := make(map[string]string)
+		for k, v := range attrs {
+			result[k] = v
+		}
+		return result
+	}
+	
+	// Return nil if object attributes don't exist
+	return nil
+}
+
 // getEnforcer returns the appropriate enforcer for the given model
 func (s *AuthService) getEnforcer(model AccessControlModel) *casbin.Enforcer {
 	switch model {
@@ -713,35 +987,8 @@ func (s *AuthService) initializeData() error {
 		s.rbacEnforcer.AddPolicy(policy)
 	}
 
-	// Initial data for ABAC (attribute-based)
-	// Only add if no user attributes exist in database (first run)
-	var userAttrCount int64
-	s.db.Model(&UserAttribute{}).Count(&userAttrCount)
-	if userAttrCount == 0 {
-		// Alice attributes
-		s.saveUserAttribute("alice", "department", "hr")
-		s.saveUserAttribute("alice", "position", "manager")
-		s.saveUserAttribute("alice", "clearance", "high")
-
-		// Bob attributes
-		s.saveUserAttribute("bob", "department", "engineering")
-		s.saveUserAttribute("bob", "position", "developer")
-		s.saveUserAttribute("bob", "clearance", "medium")
-
-		// Charlie attributes
-		s.saveUserAttribute("charlie", "department", "sales")
-		s.saveUserAttribute("charlie", "position", "representative")
-		s.saveUserAttribute("charlie", "clearance", "low")
-
-		// Object attributes
-		s.saveObjectAttribute("confidential_data", "classification", "confidential")
-		s.saveObjectAttribute("confidential_data", "department", "hr")
-		s.saveObjectAttribute("confidential_data", "sensitivity", "high")
-
-		s.saveObjectAttribute("public_data", "classification", "public")
-		s.saveObjectAttribute("public_data", "department", "all")
-		s.saveObjectAttribute("public_data", "sensitivity", "low")
-	}
+	// No hardcoded initial data for ABAC
+	// Users and objects will have attributes set dynamically via API
 
 	// Initial data for ReBAC (relationship-based)
 	// Only add if no relationships exist in database (first run)
@@ -781,58 +1028,67 @@ func (s *AuthService) initializeData() error {
 		s.relationshipGraph.AddRelationship("alice", "owner", "alice_post")
 	}
 
+	// Initialize ABAC policies
+	err := s.initializeABACPolicies()
+	if err != nil {
+		return fmt.Errorf("failed to initialize ABAC policies: %v", err)
+	}
+
 	return nil
 }
 
-// matchABACAttributes checks if the subject's attributes match the access requirements
+// initializeABACPolicies initializes an empty policy engine
+func (s *AuthService) initializeABACPolicies() error {
+	// No hardcoded policies - pure generic engine
+	// Policies will be created dynamically via API
+	return nil
+}
+
+// matchABACAttributes uses the policy engine to evaluate ABAC authorization
 func (s *AuthService) matchABACAttributes(subject, object, action string, reqAttrs map[string]string) bool {
-	// Get user attributes
-	userAttrs := s.userAttrs[subject]
+	// Get user attributes from persistent storage
+	userAttrs, _ := s.getUserAttributesFromDB(subject)
 	if userAttrs == nil {
 		userAttrs = make(map[string]string)
 	}
 
-	// Merge request attributes
-	for k, v := range reqAttrs {
-		userAttrs[k] = v
-	}
-
 	// Get object attributes
-	objectAttrs := s.objectAttrs[object]
+	objectAttrs := s.getObjectAttributes(object)
 	if objectAttrs == nil {
 		objectAttrs = make(map[string]string)
 	}
 
-	// Environment attributes
+	// Create environment attributes
 	envAttrs := map[string]string{
-		"time":     strconv.Itoa(time.Now().Hour()),
-		"location": "office",
-		"device":   "trusted",
+		"time": strconv.Itoa(time.Now().Hour()),
+		"date": time.Now().Format("2006-01-02"),
+		"day":  time.Now().Format("Monday"),
 	}
 
-	// Simple rule-based checks
-	// 1. High clearance level can access everything
-	if userAttrs["clearance"] == "high" {
-		return true
+	// Override with request attributes (including location if provided)
+	for k, v := range reqAttrs {
+		envAttrs[k] = v
 	}
 
-	// 2. Same department resources are accessible
-	if userAttrs["department"] == objectAttrs["department"] {
-		return true
+	// Use "hour" attribute from request if provided, otherwise use current time
+	if hourStr, exists := reqAttrs["hour"]; exists {
+		envAttrs["time"] = hourStr
 	}
 
-	// 3. Public data is readable by everyone
-	if objectAttrs["classification"] == "public" && action == "read" {
-		return true
+	// Create evaluation context
+	ctx := &PolicyEvaluationContext{
+		UserAttributes:        userAttrs,
+		ObjectAttributes:      objectAttrs,
+		EnvironmentAttributes: envAttrs,
+		ActionAttributes:      make(map[string]string),
+		Subject:               subject,
+		Object:                object,
+		Action:                action,
 	}
 
-	// 4. Confidential data only accessible during business hours (9-18)
-	currentHour, _ := strconv.Atoi(envAttrs["time"])
-	if objectAttrs["classification"] == "confidential" {
-		return currentHour >= 9 && currentHour <= 18
-	}
-
-	return false
+	// Use policy engine to evaluate
+	allowed, _ := s.policyEngine.Evaluate(ctx)
+	return allowed
 }
 
 // enforceHandler handles authorization enforcement requests for all models
@@ -1238,6 +1494,179 @@ func (s *AuthService) getModelsHandler(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(response)
 }
 
+// setObjectAttributesHandler sets attributes for an object (ABAC)
+func (s *AuthService) setObjectAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		Object     string            `json:"object"`
+		Attributes map[string]string `json:"attributes"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+
+	if request.Object == "" {
+		http.Error(w, "Object is required", http.StatusBadRequest)
+		return
+	}
+
+	if len(request.Attributes) == 0 {
+		http.Error(w, "At least one attribute is required", http.StatusBadRequest)
+		return
+	}
+
+	// Save each attribute to database
+	for key, value := range request.Attributes {
+		err := s.saveObjectAttribute(request.Object, key, value)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Failed to save object attribute: %v", err), http.StatusInternalServerError)
+			return
+		}
+	}
+
+	response := map[string]interface{}{
+		"message":    "Object attributes set successfully",
+		"object":     request.Object,
+		"attributes": request.Attributes,
+		"model":      "abac",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// getObjectAttributesHandler retrieves attributes for an object (ABAC)
+func (s *AuthService) getObjectAttributesHandler(w http.ResponseWriter, r *http.Request) {
+	object := r.URL.Query().Get("object")
+	if object == "" {
+		http.Error(w, "object parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get attributes from database
+	attributes := s.getObjectAttributes(object)
+	if attributes == nil {
+		attributes = make(map[string]string)
+	}
+
+	response := map[string]interface{}{
+		"object":     object,
+		"attributes": attributes,
+		"model":      "abac",
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// addABACPolicyHandler creates a new ABAC policy
+func (s *AuthService) addABACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	var policy ABACPolicy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+
+	// Validate required fields
+	if policy.ID == "" || policy.Name == "" || policy.Effect == "" {
+		http.Error(w, "ID, Name, and Effect are required", http.StatusBadRequest)
+		return
+	}
+
+	// Validate effect
+	if policy.Effect != "allow" && policy.Effect != "deny" {
+		http.Error(w, "Effect must be 'allow' or 'deny'", http.StatusBadRequest)
+		return
+	}
+
+	// Set timestamps
+	policy.CreatedAt = time.Now()
+	policy.UpdatedAt = time.Now()
+
+	// Add policy to engine
+	err := s.policyEngine.AddPolicy(&policy)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to add policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"message": "ABAC policy added successfully",
+		"policy":  policy,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// removeABACPolicyHandler removes an ABAC policy
+func (s *AuthService) removeABACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	var request struct {
+		ID string `json:"id"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(w, "Invalid JSON format", http.StatusBadRequest)
+		return
+	}
+
+	if request.ID == "" {
+		http.Error(w, "Policy ID is required", http.StatusBadRequest)
+		return
+	}
+
+	err := s.policyEngine.RemovePolicy(request.ID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to remove policy: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	response := map[string]interface{}{
+		"message":   "ABAC policy removed successfully",
+		"policy_id": request.ID,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// getABACPoliciesHandler returns all ABAC policies
+func (s *AuthService) getABACPoliciesHandler(w http.ResponseWriter, r *http.Request) {
+	policies := make([]*ABACPolicy, 0)
+	for _, policy := range s.policyEngine.policies {
+		policies = append(policies, policy)
+	}
+
+	response := map[string]interface{}{
+		"policies": policies,
+		"count":    len(policies),
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// getABACPolicyHandler returns a specific ABAC policy by ID
+func (s *AuthService) getABACPolicyHandler(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	policyID := vars["id"]
+
+	if policyID == "" {
+		http.Error(w, "Policy ID is required", http.StatusBadRequest)
+		return
+	}
+
+	policy, exists := s.policyEngine.policies[policyID]
+	if !exists {
+		http.Error(w, "Policy not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(policy)
+}
+
 // healthHandler provides a health check endpoint
 func (s *AuthService) healthHandler(w http.ResponseWriter, r *http.Request) {
 	response := map[string]interface{}{
@@ -1309,6 +1738,14 @@ func main() {
 	api.HandleFunc("/users/roles", authService.getUserRolesHandler).Methods("GET")
 	api.HandleFunc("/users/attributes", authService.setUserAttributesHandler).Methods("POST")
 	api.HandleFunc("/users/attributes", authService.getUserAttributesHandler).Methods("GET")
+	api.HandleFunc("/objects/attributes", authService.setObjectAttributesHandler).Methods("POST")
+	api.HandleFunc("/objects/attributes", authService.getObjectAttributesHandler).Methods("GET")
+
+	// ABAC Policy Management endpoints
+	api.HandleFunc("/abac/policies", authService.addABACPolicyHandler).Methods("POST")
+	api.HandleFunc("/abac/policies", authService.removeABACPolicyHandler).Methods("DELETE")
+	api.HandleFunc("/abac/policies", authService.getABACPoliciesHandler).Methods("GET")
+	api.HandleFunc("/abac/policies/{id}", authService.getABACPolicyHandler).Methods("GET")
 
 	// ReBAC-specific endpoints
 	api.HandleFunc("/relationships", authService.addRelationshipHandler).Methods("POST")
@@ -1339,6 +1776,12 @@ func main() {
 	log.Printf("  GET  /api/v1/users/roles?user=alice - Get user roles (RBAC only)")
 	log.Printf("  POST /api/v1/users/attributes - Set user attributes (ABAC only)")
 	log.Printf("  GET  /api/v1/users/attributes?user=alice - Get user attributes (ABAC only)")
+	log.Printf("  POST /api/v1/objects/attributes - Set object attributes (ABAC only)")
+	log.Printf("  GET  /api/v1/objects/attributes?object=document1 - Get object attributes (ABAC only)")
+	log.Printf("  POST /api/v1/abac/policies - Add ABAC policy (ABAC only)")
+	log.Printf("  DELETE /api/v1/abac/policies - Remove ABAC policy (ABAC only)")
+	log.Printf("  GET  /api/v1/abac/policies - Get all ABAC policies (ABAC only)")
+	log.Printf("  GET  /api/v1/abac/policies/{id} - Get specific ABAC policy (ABAC only)")
 	log.Printf("  POST /api/v1/relationships - Add relationship (ReBAC only)")
 	log.Printf("  DELETE /api/v1/relationships - Remove relationship (ReBAC only)")
 	log.Printf("  GET  /api/v1/relationships?subject=alice - Get relationships (ReBAC only)")

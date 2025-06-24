@@ -42,6 +42,11 @@ Continue with the API documentation and technical details below.
 - ⚡ **Fast Performance**: Optimized for high-throughput authorization checks
 - 🏗️ **Scalable Architecture**: Designed for enterprise-grade scalability
 - 💾 **Intelligent Caching**: Memory caching with database persistence for optimal performance
+- 🧠 **Advanced ABAC Engine**: Full-featured policy engine with configurable rules
+- 🎛️ **Dynamic Policy Management**: Create, update, and delete policies without restart
+- 🔧 **Rich Operators**: Support for eq, ne, gt, gte, lt, lte, in, contains, regex operators
+- 🔗 **Logic Combinations**: AND/OR logic for complex policy conditions
+- 📈 **Priority-Based Evaluation**: Policy priority system for conflict resolution
 
 ## Build Instructions
 
@@ -222,7 +227,59 @@ curl "http://localhost:8080/api/v1/policies?model=rbac"
 
 ### 3. ABAC (Attribute-Based Access Control)
 
-ABAC makes authorization decisions based on attributes of users, objects, and environment.
+ABAC makes authorization decisions based on attributes of users, objects, and environment using a sophisticated policy engine.
+
+#### ABAC Policy Engine Features
+
+Our ABAC implementation uses a powerful policy engine that supports:
+
+- **Dynamic Policies**: Configurable rules stored in database
+- **Multiple Operators**: eq, ne, gt, gte, lt, lte, in, contains, regex
+- **Logic Combinations**: AND/OR operations for complex conditions  
+- **Priority System**: Policy evaluation based on priority order
+- **Attribute Types**: User, object, environment, and action attributes
+- **Real-time Evaluation**: Context-aware authorization decisions
+
+#### Generic Policy Engine
+
+The ABAC engine starts completely empty with no hardcoded policies, providing a pure generic authorization platform. You can create any authorization policies that fit your business requirements using the powerful policy management APIs.
+
+#### Create Custom ABAC Policy
+
+```bash
+curl -X POST http://localhost:8080/api/v1/abac/policies \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "manager_access",
+    "name": "Manager Access Policy",
+    "description": "Managers can access their department resources",
+    "effect": "allow",
+    "priority": 100,
+    "conditions": [
+      {
+        "type": "user",
+        "field": "position",
+        "operator": "eq",
+        "value": "manager",
+        "logic_op": "and"
+      },
+      {
+        "type": "user",
+        "field": "department",
+        "operator": "eq",
+        "value": "engineering",
+        "logic_op": "and"
+      },
+      {
+        "type": "object",
+        "field": "department",
+        "operator": "eq",
+        "value": "engineering",
+        "logic_op": ""
+      }
+    ]
+  }'
+```
 
 #### Set User Attributes
 
@@ -230,11 +287,24 @@ ABAC makes authorization decisions based on attributes of users, objects, and en
 curl -X POST http://localhost:8080/api/v1/users/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "alice",
+    "subject": "bob",
     "attributes": {
-      "department": "hr",
-      "clearance": "high",
-      "position": "manager"
+      "position": "manager",
+      "department": "engineering"
+    }
+  }'
+```
+
+#### Set Object Attributes
+
+```bash
+curl -X POST http://localhost:8080/api/v1/objects/attributes \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object": "project_docs",
+    "attributes": {
+      "department": "engineering",
+      "classification": "internal"
     }
   }'
 ```
@@ -246,8 +316,8 @@ curl -X POST http://localhost:8080/api/v1/enforce \
   -H "Content-Type: application/json" \
   -d '{
     "model": "abac",
-    "subject": "alice",
-    "object": "confidential_data",
+    "subject": "bob",
+    "object": "project_docs",
     "action": "read",
     "attributes": {
       "location": "office"
@@ -255,10 +325,47 @@ curl -X POST http://localhost:8080/api/v1/enforce \
   }'
 ```
 
+Expected response:
+```json
+{
+  "allowed": true,
+  "message": "Access granted",
+  "model": "abac"
+}
+```
+
 #### Get User Attributes
 
 ```bash
-curl "http://localhost:8080/api/v1/users/attributes?user=alice"
+curl "http://localhost:8080/api/v1/users/attributes?user=bob"
+```
+
+#### Get Object Attributes
+
+```bash
+curl "http://localhost:8080/api/v1/objects/attributes?object=project_docs"
+```
+
+#### List All ABAC Policies
+
+```bash
+curl "http://localhost:8080/api/v1/abac/policies"
+```
+
+#### Get Specific Policy
+
+```bash
+curl "http://localhost:8080/api/v1/abac/policies/manager_access"
+```
+
+#### Remove Policy
+
+```bash
+curl -X DELETE http://localhost:8080/api/v1/abac/policies \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "manager_access"
+  }'
 ```
 
 ### 4. ReBAC (Relationship-Based Access Control)
@@ -377,10 +484,21 @@ curl -X DELETE http://localhost:8080/api/v1/relationships \
 
 ### ABAC Specific
 
-| Method | Endpoint                               | Description         |
-| ------ | -------------------------------------- | ------------------- |
-| POST   | `/api/v1/users/attributes`             | Set user attributes |
-| GET    | `/api/v1/users/attributes?user=<user>` | Get user attributes |
+| Method | Endpoint                                 | Description           |
+| ------ | ---------------------------------------- | --------------------- |
+| POST   | `/api/v1/users/attributes`               | Set user attributes   |
+| GET    | `/api/v1/users/attributes?user=<user>`   | Get user attributes   |
+| POST   | `/api/v1/objects/attributes`             | Set object attributes |
+| GET    | `/api/v1/objects/attributes?object=<id>` | Get object attributes |
+
+### ABAC Policy Management
+
+| Method | Endpoint                        | Description               |
+| ------ | ------------------------------- | ------------------------- |
+| POST   | `/api/v1/abac/policies`         | Create ABAC policy        |
+| DELETE | `/api/v1/abac/policies`         | Remove ABAC policy        |
+| GET    | `/api/v1/abac/policies`         | List all ABAC policies    |
+| GET    | `/api/v1/abac/policies/{id}`    | Get specific ABAC policy  |
 
 ### ReBAC Specific
 
@@ -474,7 +592,9 @@ The service creates and manages the following tables:
 
 - `acl_rules`: ACL policies
 - `rbac_rules`: RBAC policies and roles  
-- `abac_rules`: ABAC policies (pattern-based rules)
+- `abac_rules`: ABAC policies (pattern-based rules, legacy)
+- `abac_policies`: ABAC policy engine policies
+- `policy_conditions`: ABAC policy engine conditions
 - `user_attributes`: ABAC user attributes with full persistence
 - `object_attributes`: ABAC object attributes with full persistence
 - `relationship_records`: ReBAC relationships with persistent storage
@@ -557,7 +677,59 @@ Stores Attribute-Based Access Control policies (currently uses the same structur
 
 This design provides both scalability for large datasets and performance for real-time authorization decisions.
 
-##### 4. `user_attributes` - ABAC User Attributes
+##### 4. `abac_policies` - ABAC Policy Engine Policies
+
+Stores the main policy definitions for the ABAC policy engine.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | VARCHAR(255) | Primary key (policy ID) |
+| `name` | VARCHAR(255) | Human-readable policy name |
+| `description` | TEXT | Policy description |
+| `effect` | VARCHAR(10) | Policy effect ("allow" or "deny") |
+| `priority` | INTEGER | Policy priority (higher = evaluated first) |
+| `created_at` | DATETIME | Record creation timestamp |
+| `updated_at` | DATETIME | Record last update timestamp |
+
+**Example Data:**
+
+```sql
+INSERT INTO abac_policies (id, name, description, effect, priority) VALUES 
+('executive_access', 'Executive Access', 'CEOs can access all data from office', 'allow', 100),
+('clearance_access', 'Clearance-based Access', 'Users with sufficient clearance', 'allow', 90),
+('department_access', 'Department Access', 'Same-department resource access', 'allow', 80);
+```
+
+##### 5. `policy_conditions` - ABAC Policy Engine Conditions
+
+Stores the conditions for each policy in the ABAC policy engine.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Primary key (auto-increment) |
+| `policy_id` | VARCHAR(255) | Foreign key to `abac_policies.id` |
+| `type` | VARCHAR(50) | Condition type ("user", "object", "environment", "action") |
+| `field` | VARCHAR(100) | Attribute name |
+| `operator` | VARCHAR(20) | Comparison operator (eq, ne, gt, gte, lt, lte, in, contains, regex) |
+| `value` | VARCHAR(255) | Comparison value |
+| `logic_op` | VARCHAR(10) | Logic operator for combining with next condition ("and", "or") |
+
+**Indexes:**
+
+- `idx_policy_conditions_policy_id` on `policy_id`
+- `idx_policy_conditions_type` on `type`
+
+**Example Data:**
+
+```sql
+INSERT INTO policy_conditions (policy_id, type, field, operator, value, logic_op) VALUES 
+('executive_access', 'user', 'position', 'eq', 'ceo', 'and'),
+('executive_access', 'environment', 'location', 'eq', 'office', ''),
+('clearance_access', 'user', 'clearance', 'in', 'secret,top_secret', 'and'),
+('clearance_access', 'object', 'classification', 'in', 'secret,top_secret', '');
+```
+
+##### 6. `user_attributes` - ABAC User Attributes
 
 Stores user attributes for Attribute-Based Access Control with full persistence.
 
@@ -586,7 +758,7 @@ INSERT INTO user_attributes (user_id, attribute, value) VALUES
 ('bob', 'clearance', 'medium');
 ```
 
-##### 5. `object_attributes` - ABAC Object Attributes
+##### 7. `object_attributes` - ABAC Object Attributes
 
 Stores object attributes for Attribute-Based Access Control.
 
@@ -614,7 +786,7 @@ INSERT INTO object_attributes (object_id, attribute, value) VALUES
 ('public_data', 'classification', 'public');
 ```
 
-##### 6. `relationship_records` - ReBAC Relationships
+##### 8. `relationship_records` - ReBAC Relationships
 
 Stores Relationship-Based Access Control relationships for graph-based authorization.
 
@@ -675,7 +847,7 @@ CREATE TABLE IF NOT EXISTS rbac_rules (
     v5 VARCHAR(100)
 );
 
--- ABAC Rules Table
+-- ABAC Rules Table (Legacy)
 CREATE TABLE IF NOT EXISTS abac_rules (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ptype VARCHAR(100),
@@ -685,6 +857,28 @@ CREATE TABLE IF NOT EXISTS abac_rules (
     v3 VARCHAR(100),
     v4 VARCHAR(100),
     v5 VARCHAR(100)
+);
+
+-- ABAC Policy Engine Tables
+CREATE TABLE IF NOT EXISTS abac_policies (
+    id VARCHAR(255) PRIMARY KEY,
+    name VARCHAR(255),
+    description TEXT,
+    effect VARCHAR(10),
+    priority INTEGER,
+    created_at DATETIME,
+    updated_at DATETIME
+);
+
+CREATE TABLE IF NOT EXISTS policy_conditions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    policy_id VARCHAR(255),
+    type VARCHAR(50),
+    field VARCHAR(100),
+    operator VARCHAR(20),
+    value VARCHAR(255),
+    logic_op VARCHAR(10),
+    FOREIGN KEY (policy_id) REFERENCES abac_policies(id)
 );
 
 -- ABAC User Attributes Table
@@ -722,6 +916,10 @@ CREATE INDEX IF NOT EXISTS idx_user_attributes_user_id ON user_attributes(user_i
 CREATE INDEX IF NOT EXISTS idx_user_attributes_attribute ON user_attributes(attribute);
 CREATE INDEX IF NOT EXISTS idx_object_attributes_object_id ON object_attributes(object_id);
 CREATE INDEX IF NOT EXISTS idx_object_attributes_attribute ON object_attributes(attribute);
+
+-- Indexes for ABAC Policy Engine tables
+CREATE INDEX IF NOT EXISTS idx_policy_conditions_policy_id ON policy_conditions(policy_id);
+CREATE INDEX IF NOT EXISTS idx_policy_conditions_type ON policy_conditions(type);
 
 -- Indexes for ReBAC table
 CREATE INDEX IF NOT EXISTS idx_relationship_records_subject ON relationship_records(subject);

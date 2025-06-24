@@ -616,34 +616,71 @@ Expected response:
 
 ## Tutorial 3: ABAC (Attribute-Based Access Control)
 
-**ABAC** makes authorization decisions based on attributes of users, objects, and the environment/context.
+**ABAC** makes authorization decisions based on attributes of users, objects, and the environment/context using a sophisticated policy engine.
 
 **Use Case**: Complex organizations with dynamic access requirements based on location, time, clearance levels, departments, etc.
 
+### Understanding the ABAC Policy Engine
+
+Our ABAC implementation features a powerful, configurable policy engine that supports:
+
+- **Dynamic Policies**: Rules stored in database and evaluated in real-time
+- **Rich Operators**: eq, ne, gt, gte, lt, lte, in, contains, regex
+- **Logic Combinations**: AND/OR operations for complex conditions
+- **Priority System**: Policies evaluated by priority order
+- **Attribute Types**: User, object, environment, and action attributes
+- **Generic Design**: No hardcoded policies - completely customizable
+
+### Generic Policy Engine
+
+The ABAC engine starts completely empty, providing a pure generic authorization platform. This tutorial will show you how to create custom policies from scratch to demonstrate the flexibility and power of the system.
+
 ### Scenario
 
-At TechCorp, we want more sophisticated access control based on:
+At TechCorp, we want sophisticated access control based on:
 
-- Employee department
+- Employee department and position
 - Security clearance level
 - Access location (office vs. remote)
 - Document sensitivity
+- Time of access
 
-### Step 1: Set User Attributes
+### Step 1: Create a Custom ABAC Policy
 
-Set attributes for Alice (CEO):
+Let's create a policy that allows managers to access resources from their own department:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/users/attributes \
+curl -X POST http://localhost:8080/api/v1/abac/policies \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "alice",
-    "attributes": {
-      "department": "executive",
-      "clearance": "top_secret",
-      "position": "ceo",
-      "location": "office"
-    }
+    "id": "manager_dept_access",
+    "name": "Manager Department Access",
+    "description": "Managers can access resources from their department",
+    "effect": "allow",
+    "priority": 100,
+    "conditions": [
+      {
+        "type": "user",
+        "field": "position",
+        "operator": "eq",
+        "value": "manager",
+        "logic_op": "and"
+      },
+      {
+        "type": "user",
+        "field": "department",
+        "operator": "eq",
+        "value": "engineering",
+        "logic_op": "and"
+      },
+      {
+        "type": "object",
+        "field": "department",
+        "operator": "eq",
+        "value": "engineering",
+        "logic_op": ""
+      }
+    ]
   }'
 ```
 
@@ -651,17 +688,21 @@ Expected response:
 
 ```json
 {
-  "message": "User attributes set successfully",
-  "subject": "alice",
-  "attributes": {
-    "department": "executive",
-    "clearance": "top_secret",
-    "position": "ceo",
-    "location": "office"
-  },
-  "model": "abac"
+  "message": "ABAC policy added successfully",
+  "policy": {
+    "id": "manager_dept_access",
+    "name": "Manager Department Access",
+    "description": "Managers can access resources from their department",
+    "effect": "allow",
+    "priority": 100,
+    "conditions": [...],
+    "created_at": "2024-06-24T...",
+    "updated_at": "2024-06-24T..."
+  }
 }
 ```
+
+### Step 2: Set User Attributes
 
 Set attributes for Bob (Engineering Manager):
 
@@ -672,11 +713,23 @@ curl -X POST http://localhost:8080/api/v1/users/attributes \
     "subject": "bob",
     "attributes": {
       "department": "engineering",
-      "clearance": "secret",
-      "position": "manager",
-      "location": "office"
+      "position": "manager"
     }
   }'
+```
+
+Expected response:
+
+```json
+{
+  "message": "User attributes set successfully",
+  "subject": "bob",
+  "attributes": {
+    "department": "engineering",
+    "position": "manager"
+  },
+  "model": "abac"
+}
 ```
 
 Set attributes for Charlie (Engineer):
@@ -688,156 +741,225 @@ curl -X POST http://localhost:8080/api/v1/users/attributes \
     "subject": "charlie",
     "attributes": {
       "department": "engineering",
-      "clearance": "confidential",
-      "position": "engineer",
-      "location": "office"
+      "position": "engineer"
     }
   }'
 ```
 
-Set attributes for Diana (HR Manager):
+### Step 3: Set Object Attributes
+
+Set attributes for engineering project documents:
 
 ```bash
-curl -X POST http://localhost:8080/api/v1/users/attributes \
+curl -X POST http://localhost:8080/api/v1/objects/attributes \
   -H "Content-Type: application/json" \
   -d '{
-    "subject": "diana",
+    "object": "project_docs",
     "attributes": {
-      "department": "hr",
-      "clearance": "secret",
-      "position": "manager",
-      "location": "office"
+      "department": "engineering",
+      "classification": "internal"
     }
   }'
-```
-
-### Step 2: Test ABAC Authorization
-
-The ABAC model in our system uses custom logic to evaluate authorization based on user attributes and context.
-
-Test if Alice can access confidential data (she has top_secret clearance):
-
-```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "abac",
-    "subject": "alice",
-    "object": "confidential_data",
-    "action": "read",
-    "attributes": {
-      "location": "office"
-    }
-  }'
-```
-
-Test if Charlie can access confidential data (he has confidential clearance):
-
-```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "abac",
-    "subject": "charlie",
-    "object": "confidential_data",
-    "action": "read",
-    "attributes": {
-      "location": "office"
-    }
-  }'
-```
-
-Test access from remote location (should be more restrictive):
-
-```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "abac",
-    "subject": "charlie",
-    "object": "confidential_data",
-    "action": "read",
-    "attributes": {
-      "location": "remote"
-    }
-  }'
-```
-
-Test cross-department access (HR manager accessing engineering data):
-
-```bash
-curl -X POST http://localhost:8080/api/v1/enforce \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "abac",
-    "subject": "diana",
-    "object": "engineering_source_code",
-    "action": "read",
-    "attributes": {
-      "location": "office"
-    }
-  }'
-```
-
-### Step 3: View User Attributes
-
-Check Alice's attributes:
-
-```bash
-curl "http://localhost:8080/api/v1/users/attributes?user=alice"
 ```
 
 Expected response:
 
 ```json
 {
-  "user": "alice",
-  "attributes": {
-    "department": "executive",
-    "clearance": "top_secret",
-    "position": "ceo",
-    "location": "office"
-  },
-  "model": "abac"
-}
-```
-
-Check Charlie's attributes:
-
-```bash
-curl "http://localhost:8080/api/v1/users/attributes?user=charlie"
-```
-
-Expected response:
-
-```json
-{
-  "user": "charlie",
+  "message": "Object attributes set successfully",
+  "object": "project_docs",
   "attributes": {
     "department": "engineering",
-    "clearance": "confidential",
-    "position": "engineer",
-    "location": "office"
+    "classification": "internal"
   },
   "model": "abac"
 }
+```
+
+### Step 4: Test ABAC Authorization with Policy Engine
+
+The ABAC model uses the policy engine to evaluate authorization requests based on our custom policy.
+
+Test if Bob (manager) can access engineering project documents:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/enforce \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "abac",
+    "subject": "bob",
+    "object": "project_docs",
+    "action": "read",
+    "attributes": {
+      "location": "office"
+    }
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "allowed": true,
+  "message": "Access granted",
+  "model": "abac"
+}
+```
+
+Test if Charlie (engineer, not manager) can access the same documents:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/enforce \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "abac",
+    "subject": "charlie",
+    "object": "project_docs",
+    "action": "read",
+    "attributes": {
+      "location": "office"
+    }
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "allowed": false,
+  "message": "Access denied",
+  "model": "abac"
+}
+```
+
+### Step 5: Understanding Policy Evaluation
+
+The policy engine evaluates policies in priority order (highest first) and returns the first matching policy's effect. In our example:
+
+1. **Priority 100**: Manager Department Access policy
+
+This policy evaluates the following conditions using AND logic:
+- User position must equal "manager"
+- User department must equal "engineering" 
+- Object department must equal "engineering"
+
+For Bob: ✅ position=manager, department=engineering → conditions met → access granted
+For Charlie: ❌ position=engineer (not manager) → conditions not met → access denied
+
+### Step 6: Managing Policies
+
+View all policies:
+
+```bash
+curl "http://localhost:8080/api/v1/abac/policies"
+```
+
+Get a specific policy:
+
+```bash
+curl "http://localhost:8080/api/v1/abac/policies/manager_dept_access"
+```
+
+Create additional policies as needed for your business logic.
+
+### Step 7: View User and Object Attributes
+
+Check Bob's attributes:
+
+```bash
+curl "http://localhost:8080/api/v1/users/attributes?user=bob"
+```
+
+Expected response:
+
+```json
+{
+  "user": "bob",
+  "attributes": {
+    "department": "engineering",
+    "position": "manager"
+  },
+  "model": "abac"
+}
+```
+
+Check object attributes:
+
+```bash
+curl "http://localhost:8080/api/v1/objects/attributes?object=project_docs"
+```
+
+Expected response:
+
+```json
+{
+  "object": "project_docs",
+  "attributes": {
+    "department": "engineering",
+    "classification": "internal"
+  },
+  "model": "abac"
+}
+```
+
+### Step 8: Creating More Complex Policies
+
+You can create additional policies with different operators and logic combinations. For example, a time-based policy:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/abac/policies \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": "business_hours",
+    "name": "Business Hours Access",
+    "description": "Allow access only during business hours",
+    "effect": "allow",
+    "priority": 50,
+    "conditions": [
+      {
+        "type": "environment",
+        "field": "hour",
+        "operator": "gte",
+        "value": "9",
+        "logic_op": "and"
+      },
+      {
+        "type": "environment",
+        "field": "hour",
+        "operator": "lte",
+        "value": "17",
+        "logic_op": ""
+      }
+    ]
+  }'
 ```
 
 ### ABAC Summary
 
 **Pros:**
 
-- Extremely flexible and dynamic
-- Context-aware decisions
-- Fine-grained control
-- Supports complex business rules
+- **Generic Engine**: No hardcoded policies - completely customizable for any business logic
+- **Dynamic Evaluation**: Real-time policy evaluation with configurable rules
+- **Rich Logic**: Support for complex conditions with multiple operators (eq, ne, gt, gte, lt, lte, in, contains, regex)
+- **Context-Aware**: Decisions based on location, time, and other environmental factors
+- **Scalable**: Database-stored policies with in-memory caching
+- **Fine-Grained Control**: Attribute-level access control
+- **Policy Management**: Easy to create, modify, or remove policies via API
+- **Priority System**: Handle complex scenarios with policy precedence
 
 **Cons:**
 
-- Complex to design and implement
-- Performance considerations
-- Harder to debug and audit
-- Requires careful attribute management
+- **Complexity**: Requires careful policy design and testing
+- **Learning Curve**: Understanding how to design effective policies
+- **Debugging**: Complex policy interactions can be hard to trace
+- **Attribute Management**: Requires maintaining accurate user and object attributes
+
+**Key Features:**
+
+- **Complete Flexibility**: Define any authorization logic through custom policies
+- **Business Rule Engine**: Implement complex business rules as authorization policies  
+- **API-Driven**: All policy management through RESTful APIs
+- **Production Ready**: Built for enterprise-scale authorization needs
 
 ---
 
