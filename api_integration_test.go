@@ -1,3 +1,7 @@
+// Multi-Model Authorization Microservice - API Integration Tests
+// Copyright (c) 2024 Multi-Model Authorization Microservice
+// Licensed under the MIT License. See LICENSE file for details.
+
 package main
 
 import (

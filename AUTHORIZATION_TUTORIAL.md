@@ -1,5 +1,8 @@
 # Authorization Models Tutorial: A Complete Beginner's Guide
 
+**Multi-Model Authorization Microservice**  
+*Licensed under the MIT License - see [LICENSE](LICENSE) for details*
+
 ## Table of Contents
 
 - [Introduction](#introduction)

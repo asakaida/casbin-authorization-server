@@ -1233,3 +1233,56 @@ The SQLite database file can be backed up by simply copying the `casbin.db` file
 1. **Regular file-based backups**
 2. **Database replication** (if using SQLite with replication tools)
 3. **Export to SQL dumps** for version control
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request. For major changes, please open an issue first to discuss what you would like to change.
+
+### Development Setup
+
+1. Clone the repository
+2. Install Go 1.19 or later
+3. Run `go mod tidy` to install dependencies
+4. Run `./run_tests.sh` to execute the test suite
+5. Run `go run main.go` to start the development server
+
+### Testing
+
+The project includes comprehensive unit tests, integration tests, and end-to-end tests:
+
+```bash
+# Run all tests
+go test -v
+
+# Run quick test suite
+go test -v -short
+
+# Run with coverage
+go test -v -cover
+
+# Run performance tests
+go test -v -run "Performance|Benchmark" -bench=.
+```
+
+## Security
+
+This authorization service is designed with security best practices:
+
+- Input validation and sanitization
+- Proper HTTP status codes
+- CORS support
+- Database parameterized queries
+- Separation of authorization logic
+
+For security issues, please open an issue or contact the maintainers directly.
+
+## Acknowledgments
+
+- [Casbin](https://casbin.org/) - The powerful authorization library that powers the ACL, RBAC, and ABAC models
+- [GORM](https://gorm.io/) - The fantastic ORM library for Go
+- [Gorilla Mux](https://github.com/gorilla/mux) - HTTP request router and dispatcher
+- [Google Zanzibar](https://research.google/pubs/pub48190/) - Inspiration for ReBAC best practices
