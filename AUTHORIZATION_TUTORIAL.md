@@ -1180,9 +1180,38 @@ curl -X POST http://localhost:8080/api/v1/authorizations \
   }'
 ```
 
-### Step 7: Explore Relationship Paths
+### Step 7: Understanding Authorization vs. Relationship Paths
 
-Find how Charlie can access source code:
+**Important**: ReBAC follows best practices by separating authorization checks from relationship queries.
+
+#### Authorization Check (Recommended for Access Control)
+
+Test if Charlie can read source code (actual permission check):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/authorizations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rebac",
+    "subject": "charlie",
+    "object": "source_code.zip",
+    "action": "read"
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "allowed": true,
+  "message": "Access granted (relationship path: charlie -[member]-> engineering_team -[group_access]-> source_code.zip)",
+  "model": "rebac"
+}
+```
+
+#### Relationship Path Discovery (Debugging/Audit Only)
+
+Find how Charlie is connected to source code:
 
 ```bash
 curl "http://localhost:8080/api/v1/relationships/paths?subject=charlie&object=source_code.zip&max_depth=5"
@@ -1197,13 +1226,67 @@ Expected response:
   "subject": "charlie",
   "object": "source_code.zip",
   "max_depth": 5,
+  "model": "rebac",
+  "note": "This endpoint shows relationship connectivity, not authorization. Use /api/v1/authorizations for permission checks."
+}
+```
+
+**Key Difference**: Path discovery shows connectivity, but authorization checks determine actual permissions based on relationship types.
+
+### Step 8: Understanding Relationship-Permission Mappings
+
+ReBAC uses configurable relationship-to-permission mappings. View the default mappings:
+
+```bash
+curl http://localhost:8080/api/v1/relationships/permissions
+```
+
+Expected response:
+
+```json
+{
+  "mappings": {
+    "owner": ["read", "write", "delete", "admin"],
+    "editor": ["read", "write", "edit"],
+    "viewer": ["read", "view"],
+    "member": ["inherit"],
+    "group_access": ["read", "write"],
+    "parent": ["inherit"],
+    "friend": ["read_limited"],
+    "manager": ["read", "write", "delete", "manage"]
+  },
+  "description": "Relationship types and their associated permissions",
+  "model": "rebac",
+  "note": "These mappings define what permissions each relationship type grants"
+}
+```
+
+#### Check Specific Relationship Permissions
+
+Check if the "editor" relationship grants "write" permission:
+
+```bash
+curl -X POST http://localhost:8080/api/v1/relationships/permissions/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "relationship": "editor",
+    "permission": "write"
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "relationship": "editor",
+  "permission": "write",
+  "granted": true,
+  "all_permissions": ["read", "write", "edit"],
   "model": "rebac"
 }
 ```
 
-This shows the path: charlie → member → engineering_team → group_access → source_code.zip
-
-### Step 8: List Relationships
+### Step 9: List Relationships
 
 See all relationships for Charlie:
 
@@ -1263,17 +1346,28 @@ Expected response:
 
 **Pros:**
 
-- Models real-world relationships naturally
-- Supports complex hierarchies and collaborations
-- Flexible and intuitive
-- Great for social and collaborative platforms
+- **Separation of Concerns**: Clear distinction between relationship queries and authorization decisions
+- **Industry Standards**: Follows Google Zanzibar and other proven ReBAC patterns
+- **Configurable Permissions**: Relationship-to-permission mappings can be customized
+- **Natural Modeling**: Models real-world relationships and hierarchies intuitively
+- **Flexible Authorization**: Supports ownership, groups, hierarchies, and social relationships
+- **Debugging Support**: Path discovery helps understand relationship connectivity
+- **Performance**: Efficient direct relationship checks with inheritance support
 
 **Cons:**
 
-- Can become complex with many relationships
-- Performance considerations for deep graphs
-- Requires careful relationship modeling
-- Can be hard to debug complex permission paths
+- **Learning Curve**: Understanding relationship vs. permission concepts
+- **Complexity**: Can become complex with deep relationship graphs
+- **Debugging**: Complex permission paths can be challenging to trace
+- **Design Required**: Requires careful relationship and permission modeling
+
+**Best Practices Implemented:**
+
+1. **Authorization vs. Query Separation**: Use `POST /authorizations` for access control decisions
+2. **Relationship Discovery**: Use `GET /relationships/paths` for debugging and auditing
+3. **Permission Transparency**: View relationship-permission mappings via API
+4. **Configurable Logic**: Relationship permissions can be modified as needed
+5. **Industry Patterns**: Follows established ReBAC patterns from major systems
 
 ---
 

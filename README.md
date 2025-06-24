@@ -578,7 +578,32 @@ curl -X POST http://localhost:8080/api/v1/authorizations \
   }'
 ```
 
-#### Find Relationship Path
+#### Authorization Check (Recommended)
+
+Check if Alice can write to document1 (actual permission check):
+
+```bash
+curl -X POST http://localhost:8080/api/v1/authorizations \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "rebac",
+    "subject": "alice",
+    "object": "document1",
+    "action": "write"
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "allowed": true,
+  "message": "Access granted (relationship path: alice -[owner]-> document1)",
+  "model": "rebac"
+}
+```
+
+#### Find Relationship Path (Debugging/Audit)
 
 ```bash
 curl "http://localhost:8080/api/v1/relationships/paths?subject=alice&object=document1&max_depth=5"
@@ -593,6 +618,55 @@ Expected response:
   "subject": "alice",
   "object": "document1",
   "max_depth": 5,
+  "model": "rebac",
+  "note": "This endpoint shows relationship connectivity, not authorization. Use /api/v1/authorizations for permission checks."
+}
+```
+
+#### View Relationship-Permission Mappings
+
+```bash
+curl http://localhost:8080/api/v1/relationships/permissions
+```
+
+Expected response:
+
+```json
+{
+  "mappings": {
+    "owner": ["read", "write", "delete", "admin"],
+    "editor": ["read", "write", "edit"],
+    "viewer": ["read", "view"],
+    "member": ["inherit"],
+    "group_access": ["read", "write"],
+    "parent": ["inherit"],
+    "friend": ["read_limited"],
+    "manager": ["read", "write", "delete", "manage"]
+  },
+  "description": "Relationship types and their associated permissions",
+  "model": "rebac"
+}
+```
+
+#### Check Relationship Permission
+
+```bash
+curl -X POST http://localhost:8080/api/v1/relationships/permissions/check \
+  -H "Content-Type: application/json" \
+  -d '{
+    "relationship": "editor",
+    "permission": "write"
+  }'
+```
+
+Expected response:
+
+```json
+{
+  "relationship": "editor",
+  "permission": "write",
+  "granted": true,
+  "all_permissions": ["read", "write", "edit"],
   "model": "rebac"
 }
 ```
@@ -689,12 +763,14 @@ The authorization service provides a complete RESTful API with resource-oriented
 
 ### ReBAC (Relationship-Based Access Control) Endpoints
 
-| Method | Endpoint                                             | Description            |
-| ------ | ---------------------------------------------------- | ---------------------- |
-| POST   | `/api/v1/relationships`                              | Add relationship       |
-| GET    | `/api/v1/relationships?subject=<subject>`            | List relationships     |
-| DELETE | `/api/v1/relationships/{id}`                         | Remove relationship    |
-| GET    | `/api/v1/relationships/paths?subject=<s>&object=<o>` | Find relationship path |
+| Method | Endpoint                                             | Description                           |
+| ------ | ---------------------------------------------------- | ------------------------------------- |
+| POST   | `/api/v1/relationships`                              | Add relationship                      |
+| GET    | `/api/v1/relationships?subject=<subject>`            | List relationships                    |
+| DELETE | `/api/v1/relationships/{id}`                         | Remove relationship                   |
+| GET    | `/api/v1/relationships/paths?subject=<s>&object=<o>` | Find relationship path (debug/audit)  |
+| GET    | `/api/v1/relationships/permissions`                  | View relationship-permission mappings |
+| POST   | `/api/v1/relationships/permissions/check`            | Check relationship permission         |
 
 **Relationship ID format**: `subject:relationship:object` (e.g., `alice:owner:document1`)
 

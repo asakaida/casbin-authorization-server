@@ -132,6 +132,7 @@ type RelationshipGraph struct {
 	relationships map[string][]Relationship
 	objectTypes   map[string]string // Object type mappings
 	db            *gorm.DB          // Database connection for persistence
+	permissions   map[string][]string // Relationship to permissions mapping
 }
 
 // RelationshipRecord represents a relationship record in the database
@@ -176,7 +177,11 @@ func NewRelationshipGraph(db *gorm.DB) (*RelationshipGraph, error) {
 		relationships: make(map[string][]Relationship),
 		objectTypes:   make(map[string]string),
 		db:            db,
+		permissions:   make(map[string][]string),
 	}
+
+	// Initialize default permission mappings following ReBAC best practices
+	rg.initializeDefaultPermissions()
 
 	// Load existing relationships from database
 	err = rg.loadFromDatabase()
@@ -219,6 +224,53 @@ func (rg *RelationshipGraph) loadFromDatabase() error {
 	}
 
 	return nil
+}
+
+// initializeDefaultPermissions sets up the default relationship-to-permission mappings
+// following ReBAC best practices where relationships define connections, not permissions
+func (rg *RelationshipGraph) initializeDefaultPermissions() {
+	// Owner relationship grants all permissions
+	rg.permissions["owner"] = []string{"read", "write", "delete", "admin"}
+	
+	// Editor relationship grants read and write permissions
+	rg.permissions["editor"] = []string{"read", "write", "edit"}
+	
+	// Viewer relationship grants read-only permission
+	rg.permissions["viewer"] = []string{"read", "view"}
+	
+	// Member relationship inherits permissions from the group
+	rg.permissions["member"] = []string{"inherit"}
+	
+	// Group access relationship defines what groups can access
+	rg.permissions["group_access"] = []string{"read", "write"}
+	
+	// Parent relationship allows inheritance of permissions
+	rg.permissions["parent"] = []string{"inherit"}
+	
+	// Friend relationship grants limited read access
+	rg.permissions["friend"] = []string{"read_limited"}
+	
+	// Manager relationship grants administrative permissions
+	rg.permissions["manager"] = []string{"read", "write", "delete", "manage"}
+}
+
+// GetPermissionsForRelationship returns the permissions associated with a relationship type
+func (rg *RelationshipGraph) GetPermissionsForRelationship(relationship string) []string {
+	if perms, exists := rg.permissions[relationship]; exists {
+		return perms
+	}
+	return []string{}
+}
+
+// HasPermissionThroughRelationship checks if a relationship grants a specific permission
+func (rg *RelationshipGraph) HasPermissionThroughRelationship(relationship, permission string) bool {
+	perms := rg.GetPermissionsForRelationship(relationship)
+	for _, perm := range perms {
+		if perm == permission || perm == "admin" {
+			return true
+		}
+	}
+	return false
 }
 
 // saveToDatabase saves a relationship to the database
@@ -371,55 +423,115 @@ func (rg *RelationshipGraph) FindRelationshipPath(subject, targetObject string, 
 }
 
 // CheckReBACAccess checks access permissions using ReBAC rules
+// This method properly separates authorization logic from relationship queries
+// following ReBAC best practices (like Google Zanzibar)
 func (rg *RelationshipGraph) CheckReBACAccess(subject, object, action string) (bool, string) {
-	// 1. Check direct ownership
-	if rg.HasDirectRelationship(subject, "owner", object) {
-		return true, fmt.Sprintf("%s -[owner]-> %s", subject, object)
-	}
-
-	// 2. Check editor permissions
-	if action == "write" || action == "edit" {
-		if rg.HasDirectRelationship(subject, "editor", object) {
-			return true, fmt.Sprintf("%s -[editor]-> %s", subject, object)
+	// Map common actions to standardized permissions
+	permission := rg.mapActionToPermission(action)
+	
+	// 1. Check all direct relationships and their associated permissions
+	directRelationships := rg.GetDirectRelationships(subject, object)
+	for _, rel := range directRelationships {
+		if rg.HasPermissionThroughRelationship(rel.Relationship, permission) {
+			return true, fmt.Sprintf("%s -[%s]-> %s", subject, rel.Relationship, object)
 		}
 	}
 
-	// 3. Check read permissions
-	if action == "read" {
-		if rg.HasDirectRelationship(subject, "viewer", object) {
-			return true, fmt.Sprintf("%s -[viewer]-> %s", subject, object)
+	// 2. Check access through group membership (indirect relationships)
+	groupAccess, groupPath := rg.checkGroupAccess(subject, object, permission)
+	if groupAccess {
+		return true, groupPath
+	}
+
+	// 3. Check hierarchical access (parent-child relationships)
+	hierarchicalAccess, hierarchicalPath := rg.checkHierarchicalAccess(subject, object, permission)
+	if hierarchicalAccess {
+		return true, hierarchicalPath
+	}
+
+	// 4. Check social relationships for limited access
+	if permission == "read" || permission == "read_limited" {
+		socialAccess, socialPath := rg.checkSocialAccess(subject, object, 3)
+		if socialAccess {
+			return true, socialPath
 		}
 	}
 
-	// 4. Check access through group membership
-	for key, relationships := range rg.relationships {
+	return false, ""
+}
+
+// mapActionToPermission maps action strings to standardized permissions
+func (rg *RelationshipGraph) mapActionToPermission(action string) string {
+	// Normalize common action names to permissions
+	switch action {
+	case "view":
+		return "read"
+	case "edit", "update", "modify":
+		return "write"
+	case "remove":
+		return "delete"
+	case "manage", "administer":
+		return "admin"
+	default:
+		return action
+	}
+}
+
+// GetDirectRelationships returns all direct relationships between subject and object
+func (rg *RelationshipGraph) GetDirectRelationships(subject, object string) []Relationship {
+	var relationships []Relationship
+	
+	for key, rels := range rg.relationships {
 		parts := strings.Split(key, ":")
-		if len(parts) != 2 || parts[0] != subject || parts[1] != "member" {
-			continue
-		}
-
-		for _, rel := range relationships {
-			groupName := rel.Object
-			// Check if the group has access to the target object
-			if rg.HasDirectRelationship(groupName, "group_access", object) {
-				path := fmt.Sprintf("%s -[member]-> %s -[group_access]-> %s", subject, groupName, object)
-				return true, path
+		if len(parts) == 2 && parts[0] == subject && !strings.HasPrefix(parts[1], "reverse_") {
+			for _, rel := range rels {
+				if rel.Object == object {
+					relationships = append(relationships, rel)
+				}
 			}
 		}
 	}
+	
+	return relationships
+}
 
-	// 5. Check hierarchical access (parent-child relationship)
+// checkGroupAccess checks if subject has access through group membership
+func (rg *RelationshipGraph) checkGroupAccess(subject, object, permission string) (bool, string) {
+	// Find all groups the subject is a member of
+	memberKey := fmt.Sprintf("%s:member", subject)
+	if groups, exists := rg.relationships[memberKey]; exists {
+		for _, groupRel := range groups {
+			groupName := groupRel.Object
+			
+			// Check if the group has the required permission on the object
+			groupRelationships := rg.GetDirectRelationships(groupName, object)
+			for _, rel := range groupRelationships {
+				if rg.HasPermissionThroughRelationship(rel.Relationship, permission) {
+					path := fmt.Sprintf("%s -[member]-> %s -[%s]-> %s", 
+						subject, groupName, rel.Relationship, object)
+					return true, path
+				}
+			}
+		}
+	}
+	
+	return false, ""
+}
+
+// checkHierarchicalAccess checks access through parent-child relationships
+func (rg *RelationshipGraph) checkHierarchicalAccess(subject, object, permission string) (bool, string) {
+	// Find parent objects
 	for key, relationships := range rg.relationships {
 		parts := strings.Split(key, ":")
 		if len(parts) != 2 || parts[1] != "parent" {
 			continue
 		}
-
+		
 		parentObject := parts[0]
 		for _, rel := range relationships {
 			if rel.Object == object {
-				// Check if there's access to the parent object
-				hasAccess, parentPath := rg.CheckReBACAccess(subject, parentObject, action)
+				// Recursively check if subject has access to parent
+				hasAccess, parentPath := rg.CheckReBACAccess(subject, parentObject, permission)
 				if hasAccess {
 					path := fmt.Sprintf("%s -> %s -[parent]-> %s", parentPath, parentObject, object)
 					return true, path
@@ -427,15 +539,19 @@ func (rg *RelationshipGraph) CheckReBACAccess(subject, object, action string) (b
 			}
 		}
 	}
+	
+	return false, ""
+}
 
-	// 6. Check access through friend relationships (social features)
-	if action == "read" {
-		found, path := rg.FindRelationshipPath(subject, object, 3)
-		if found && strings.Contains(path, "friend") {
+// checkSocialAccess checks access through social relationships (e.g., friend connections)
+func (rg *RelationshipGraph) checkSocialAccess(subject, object string, maxDepth int) (bool, string) {
+	found, path := rg.FindRelationshipPath(subject, object, maxDepth)
+	if found && strings.Contains(path, "friend") {
+		// Verify that the friend relationship grants the required permission
+		if rg.HasPermissionThroughRelationship("friend", "read_limited") {
 			return true, path
 		}
 	}
-
 	return false, ""
 }
 
@@ -2282,8 +2398,70 @@ func (s *AuthService) findRelationshipPathHandler(w http.ResponseWriter, r *http
 		"object":    object,
 		"max_depth": maxDepth,
 		"model":     "rebac",
+		"note":      "This endpoint shows relationship connectivity, not authorization. Use /api/v1/authorizations for permission checks.",
 	}
 
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// getRelationshipPermissionsHandler returns the permissions associated with relationships
+func (s *AuthService) getRelationshipPermissionsHandler(w http.ResponseWriter, r *http.Request) {
+	relationshipType := r.URL.Query().Get("type")
+	
+	response := make(map[string]interface{})
+	
+	if relationshipType != "" {
+		// Get permissions for specific relationship type
+		permissions := s.relationshipGraph.GetPermissionsForRelationship(relationshipType)
+		response["relationship"] = relationshipType
+		response["permissions"] = permissions
+		response["exists"] = len(permissions) > 0
+	} else {
+		// Get all relationship-permission mappings
+		allMappings := make(map[string][]string)
+		for relType, perms := range s.relationshipGraph.permissions {
+			allMappings[relType] = perms
+		}
+		response["mappings"] = allMappings
+		response["description"] = "Relationship types and their associated permissions"
+	}
+	
+	response["model"] = "rebac"
+	response["note"] = "These mappings define what permissions each relationship type grants"
+	
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// checkRelationshipPermissionHandler checks if a relationship grants a specific permission
+func (s *AuthService) checkRelationshipPermissionHandler(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		Relationship string `json:"relationship"`
+		Permission   string `json:"permission"`
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request format", http.StatusBadRequest)
+		return
+	}
+	
+	if req.Relationship == "" || req.Permission == "" {
+		http.Error(w, "relationship and permission fields are required", http.StatusBadRequest)
+		return
+	}
+	
+	hasPermission := s.relationshipGraph.HasPermissionThroughRelationship(req.Relationship, req.Permission)
+	permissions := s.relationshipGraph.GetPermissionsForRelationship(req.Relationship)
+	
+	response := map[string]interface{}{
+		"relationship":   req.Relationship,
+		"permission":     req.Permission,
+		"granted":        hasPermission,
+		"all_permissions": permissions,
+		"model":          "rebac",
+	}
+	
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -2390,6 +2568,10 @@ func main() {
 	api.HandleFunc("/relationships", authService.getRelationshipsHandler).Methods("GET")
 	api.HandleFunc("/relationships/{id}", authService.deleteRelationshipHandler).Methods("DELETE")
 	api.HandleFunc("/relationships/paths", authService.findRelationshipPathHandler).Methods("GET")
+	
+	// ReBAC permission mapping endpoints (following best practices)
+	api.HandleFunc("/relationships/permissions", authService.getRelationshipPermissionsHandler).Methods("GET")
+	api.HandleFunc("/relationships/permissions/check", authService.checkRelationshipPermissionHandler).Methods("POST")
 
 	// Apply middleware
 	router.Use(corsMiddleware)
