@@ -134,8 +134,8 @@ type Relationship struct {
 // RelationshipGraph manages relationships for ReBAC
 type RelationshipGraph struct {
 	relationships map[string][]Relationship
-	objectTypes   map[string]string // Object type mappings
-	db            *gorm.DB          // Database connection for persistence
+	objectTypes   map[string]string   // Object type mappings
+	db            *gorm.DB            // Database connection for persistence
 	permissions   map[string][]string // Relationship to permissions mapping
 }
 
@@ -235,25 +235,25 @@ func (rg *RelationshipGraph) loadFromDatabase() error {
 func (rg *RelationshipGraph) initializeDefaultPermissions() {
 	// Owner relationship grants all permissions
 	rg.permissions["owner"] = []string{"read", "write", "delete", "admin"}
-	
+
 	// Editor relationship grants read and write permissions
 	rg.permissions["editor"] = []string{"read", "write", "edit"}
-	
+
 	// Viewer relationship grants read-only permission
 	rg.permissions["viewer"] = []string{"read", "view"}
-	
+
 	// Member relationship inherits permissions from the group
 	rg.permissions["member"] = []string{"inherit"}
-	
+
 	// Group access relationship defines what groups can access
 	rg.permissions["group_access"] = []string{"read", "write"}
-	
+
 	// Parent relationship allows inheritance of permissions
 	rg.permissions["parent"] = []string{"inherit"}
-	
+
 	// Friend relationship grants limited read access
 	rg.permissions["friend"] = []string{"read_limited"}
-	
+
 	// Manager relationship grants administrative permissions
 	rg.permissions["manager"] = []string{"read", "write", "delete", "manage"}
 }
@@ -432,7 +432,7 @@ func (rg *RelationshipGraph) FindRelationshipPath(subject, targetObject string, 
 func (rg *RelationshipGraph) CheckReBACAccess(subject, object, action string) (bool, string) {
 	// Map common actions to standardized permissions
 	permission := rg.mapActionToPermission(action)
-	
+
 	// 1. Check all direct relationships and their associated permissions
 	directRelationships := rg.GetDirectRelationships(subject, object)
 	for _, rel := range directRelationships {
@@ -484,7 +484,7 @@ func (rg *RelationshipGraph) mapActionToPermission(action string) string {
 // GetDirectRelationships returns all direct relationships between subject and object
 func (rg *RelationshipGraph) GetDirectRelationships(subject, object string) []Relationship {
 	var relationships []Relationship
-	
+
 	for key, rels := range rg.relationships {
 		parts := strings.Split(key, ":")
 		if len(parts) == 2 && parts[0] == subject && !strings.HasPrefix(parts[1], "reverse_") {
@@ -495,7 +495,7 @@ func (rg *RelationshipGraph) GetDirectRelationships(subject, object string) []Re
 			}
 		}
 	}
-	
+
 	return relationships
 }
 
@@ -506,19 +506,19 @@ func (rg *RelationshipGraph) checkGroupAccess(subject, object, permission string
 	if groups, exists := rg.relationships[memberKey]; exists {
 		for _, groupRel := range groups {
 			groupName := groupRel.Object
-			
+
 			// Check if the group has the required permission on the object
 			groupRelationships := rg.GetDirectRelationships(groupName, object)
 			for _, rel := range groupRelationships {
 				if rg.HasPermissionThroughRelationship(rel.Relationship, permission) {
-					path := fmt.Sprintf("%s -[member]-> %s -[%s]-> %s", 
+					path := fmt.Sprintf("%s -[member]-> %s -[%s]-> %s",
 						subject, groupName, rel.Relationship, object)
 					return true, path
 				}
 			}
 		}
 	}
-	
+
 	return false, ""
 }
 
@@ -530,7 +530,7 @@ func (rg *RelationshipGraph) checkHierarchicalAccess(subject, object, permission
 		if len(parts) != 2 || parts[1] != "parent" {
 			continue
 		}
-		
+
 		parentObject := parts[0]
 		for _, rel := range relationships {
 			if rel.Object == object {
@@ -543,7 +543,7 @@ func (rg *RelationshipGraph) checkHierarchicalAccess(subject, object, permission
 			}
 		}
 	}
-	
+
 	return false, ""
 }
 
@@ -754,7 +754,7 @@ func (s *AuthService) saveUserAttribute(userID, attribute, value string) error {
 	// Check if attribute already exists
 	var existingAttr UserAttribute
 	result := s.db.Where("user_id = ? AND attribute = ?", userID, attribute).First(&existingAttr)
-	
+
 	if result.Error == nil {
 		// Update existing attribute
 		existingAttr.Value = value
@@ -787,7 +787,7 @@ func (s *AuthService) saveObjectAttribute(objectID, attribute, value string) err
 	// Check if attribute already exists
 	var existingAttr ObjectAttribute
 	result := s.db.Where("object_id = ? AND attribute = ?", objectID, attribute).First(&existingAttr)
-	
+
 	if result.Error == nil {
 		// Update existing attribute
 		existingAttr.Value = value
@@ -1050,7 +1050,7 @@ func (s *AuthService) getObjectAttributes(objectID string) map[string]string {
 		}
 		return result
 	}
-	
+
 	// Return nil if object attributes don't exist
 	return nil
 }
@@ -1509,7 +1509,7 @@ func (s *AuthService) addRoleHandler(w http.ResponseWriter, r *http.Request) {
 func (s *AuthService) setUserAttributesHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	userId := vars["userId"]
-	
+
 	var req struct {
 		Attributes map[string]string `json:"attributes"`
 	}
@@ -1957,7 +1957,7 @@ func (s *AuthService) getACLPoliciesHandler(w http.ResponseWriter, r *http.Reque
 func (s *AuthService) deleteACLPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	policyId := vars["id"]
-	
+
 	// Parse policy ID format: "subject:object:action"
 	parts := strings.Split(policyId, ":")
 	if len(parts) != 3 {
@@ -2068,7 +2068,7 @@ func (s *AuthService) getRBACPoliciesHandler(w http.ResponseWriter, r *http.Requ
 func (s *AuthService) deleteRBACPolicyHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	policyId := vars["id"]
-	
+
 	// Parse policy ID format: "subject:object:action"
 	parts := strings.Split(policyId, ":")
 	if len(parts) != 3 {
@@ -2107,7 +2107,7 @@ func (s *AuthService) deleteRBACPolicyHandler(w http.ResponseWriter, r *http.Req
 func (s *AuthService) addUserRoleHandler(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	userId := vars["userId"]
-	
+
 	var request struct {
 		Role string `json:"role"`
 	}
@@ -2412,9 +2412,9 @@ func (s *AuthService) findRelationshipPathHandler(w http.ResponseWriter, r *http
 // getRelationshipPermissionsHandler returns the permissions associated with relationships
 func (s *AuthService) getRelationshipPermissionsHandler(w http.ResponseWriter, r *http.Request) {
 	relationshipType := r.URL.Query().Get("type")
-	
+
 	response := make(map[string]interface{})
-	
+
 	if relationshipType != "" {
 		// Get permissions for specific relationship type
 		permissions := s.relationshipGraph.GetPermissionsForRelationship(relationshipType)
@@ -2430,10 +2430,10 @@ func (s *AuthService) getRelationshipPermissionsHandler(w http.ResponseWriter, r
 		response["mappings"] = allMappings
 		response["description"] = "Relationship types and their associated permissions"
 	}
-	
+
 	response["model"] = "rebac"
 	response["note"] = "These mappings define what permissions each relationship type grants"
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -2444,28 +2444,28 @@ func (s *AuthService) checkRelationshipPermissionHandler(w http.ResponseWriter, 
 		Relationship string `json:"relationship"`
 		Permission   string `json:"permission"`
 	}
-	
+
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request format", http.StatusBadRequest)
 		return
 	}
-	
+
 	if req.Relationship == "" || req.Permission == "" {
 		http.Error(w, "relationship and permission fields are required", http.StatusBadRequest)
 		return
 	}
-	
+
 	hasPermission := s.relationshipGraph.HasPermissionThroughRelationship(req.Relationship, req.Permission)
 	permissions := s.relationshipGraph.GetPermissionsForRelationship(req.Relationship)
-	
+
 	response := map[string]interface{}{
-		"relationship":   req.Relationship,
-		"permission":     req.Permission,
-		"granted":        hasPermission,
+		"relationship":    req.Relationship,
+		"permission":      req.Permission,
+		"granted":         hasPermission,
 		"all_permissions": permissions,
-		"model":          "rebac",
+		"model":           "rebac",
 	}
-	
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(response)
 }
@@ -2531,7 +2531,7 @@ func main() {
 	api := router.PathPrefix("/api/v1").Subrouter()
 	api.HandleFunc("/health", authService.healthHandler).Methods("GET")
 	api.HandleFunc("/models", authService.getModelsHandler).Methods("GET")
-	
+
 	// Authorization endpoint
 	api.HandleFunc("/authorizations", authService.authorizationHandler).Methods("POST")
 
@@ -2572,7 +2572,7 @@ func main() {
 	api.HandleFunc("/relationships", authService.getRelationshipsHandler).Methods("GET")
 	api.HandleFunc("/relationships/{id}", authService.deleteRelationshipHandler).Methods("DELETE")
 	api.HandleFunc("/relationships/paths", authService.findRelationshipPathHandler).Methods("GET")
-	
+
 	// ReBAC permission mapping endpoints (following best practices)
 	api.HandleFunc("/relationships/permissions", authService.getRelationshipPermissionsHandler).Methods("GET")
 	api.HandleFunc("/relationships/permissions/check", authService.checkRelationshipPermissionHandler).Methods("POST")
